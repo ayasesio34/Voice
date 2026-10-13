@@ -85,28 +85,31 @@ function checkFile(abs) {
   // ── ⓪ 乱码检测 ──────────────────────────────────────────
   // ⚠️ 编码事故：UTF-8 的文件被按 GBK 读，整篇会变成「鎯宠绔嬪埢楠岃瘉」这种字 ✓
   //    它**仍然是合法的 Markdown** ✗ 所以下面那几项检查一个都发现不了 ✓
-  //    真发生过：make-public.ps1 里 `Get-Content` 少了 `-Encoding UTF8`
+  //    真发生过：make-public.ps1 里 Get-Content 少了 -Encoding UTF8
   //    （PowerShell 5.1 默认按系统代码页读 ✓）→ 生成的 README 整篇乱码 ✓
   //    差一点就推到 GitHub 上了 ✗
   //
-  // ⚠️ 判据不能用"某几个特定的字" ✗
-  //    我一开始挑了「锛」「銆」两个 ✓ 结果它们只在原文含「，」「。」时才会出现 ✓
-  //    测一段没有标点的乱码时命中 0 个 ✗ 完全失效 ✓
-  //    改用**命中率**：乱码文本里这类字占 90%+ ✓ 正常中文里不到 0.01% ✓
-  //    （下面的表是从一段真实中文样本用 GBK 误读后生成的 ✓ 不是手挑的 ✓）
+  // ⚠️ 判据换过三次，前两次都是错的 ✗
+  //    ① 挑「锛」「銆」两个字 → 它们只在原文含标点时才出现 ✓ 没标点的乱码命中 0 ✗
+  //    ② 用一段样本生成特征字表 → 只覆盖那段样本用到的字 ✓ 换一段就不在表里 ✗
+  //    ③ 现在的判据：**常用汉字的占比** ✓
+  //       乱码是把 UTF-8 字节按 GBK 重新配对 ✓ 出来的字几乎全是生僻字 ✓
+  //       所以"最常用的那 80 个汉字"在乱码里占比接近 0 ✓
+  //       实测：正常中文约 40% ✓ 乱码约 0.5% ✓ 阈值 8% 两边都留了很大余量 ✓
+  //       这 80 个字是从仓库语料里统计出来的 ✓ 不是手打的 ✓
   {
     const raw = lines.join('\n')
     if (raw.includes('\uFFFD')) {
       fatal.push(`${rel}  含 U+FFFD 替换字符（文件被用错误的编码读过，有字节已永久丢失）`)
     }
-    const MOJIBAKE_CHARS = '鎯宠绔嬪埢楠岃瘉涓€鏄竴娈典腑鏂囨兂绔嬪埢楠岃瘉涓€涓笅鏁堟灉濡備綍杩樻湁鍚勭鏍囩偣锛屽彞鍙枫€傞棶鍙凤紵鎰熷徛鍙凤紒鎷彿锛堬級鍐掑彿锛氬垎鍙凤紱浠ュ強鏁板瓧鍜'
+    const COMMON = '的一不是个在了用有会里上音时成出字只到这频就来看那开人端面没自道下本件文条行以进动要后和务名能改器两码屏都服把现新标所声示而也同它程被全发接共掉色口实主置享话设'
     const cjk = raw.match(/[\u4e00-\u9fff]/g) ?? []
     if (cjk.length >= 20) {
-      const hit = cjk.filter((c) => MOJIBAKE_CHARS.includes(c)).length
+      const hit = cjk.filter((c) => COMMON.includes(c)).length
       const ratio = hit / cjk.length
-      if (ratio > 0.15) {
+      if (ratio < 0.08) {
         fatal.push(
-          `${rel}  疑似乱码（UTF-8 被按 GBK 读）：${cjk.length} 个汉字里有 ${hit} 个是典型的乱码字（${Math.round(ratio * 100)}%）`,
+          `${rel}  疑似乱码（UTF-8 被按 GBK 读）：${cjk.length} 个汉字里只有 ${hit} 个是常用字（${Math.round(ratio * 100)}%，正常中文约 40%）`,
         )
       }
     }
