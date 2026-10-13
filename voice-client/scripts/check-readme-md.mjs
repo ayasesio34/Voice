@@ -81,6 +81,25 @@ function checkFile(abs) {
 
   const lines = readFileSync(abs, 'utf8').split(/\r?\n/)
   lineCount += lines.length
+
+  // ── ⓪ 乱码检测 ──────────────────────────────────────────
+  // ⚠️ 编码事故：UTF-8 的文件被按 GBK 读，整篇会变成「锛銆鐨涓鑷鏂」这种字 ✓
+  //    它**仍然是合法的 Markdown** ✗ 所以下面那几项检查一个都发现不了 ✓
+  //    真发生过：make-public.ps1 里 `Get-Content` 少了 `-Encoding UTF8`
+  //    （PowerShell 5.1 默认按系统代码页读 ✓）→ 生成的 README 整篇乱码 ✓
+  //    差一点就推到 GitHub 上了 ✗
+  //    `锛`(U+950B) 和 `銆`(U+9286) 是这类乱码里最高频的两个字 ✓
+  //    它们在正常中文里几乎不出现 ✓ 所以拿来做特征很可靠 ✓
+  {
+    const raw = lines.join('\n')
+    if (raw.includes('\uFFFD')) {
+      fatal.push(`${rel}  含 U+FFFD 替换字符（文件被用错误的编码读过）`)
+    }
+    const mojibake = (raw.match(/[锛銆]/g) ?? []).length
+    if (mojibake >= 3) {
+      fatal.push(`${rel}  疑似乱码（UTF-8 被按 GBK 读）：出现 ${mojibake} 个「锛/銆」这类特征字`)
+    }
+  }
   const dir = dirname(abs)
 
   // ── 切成"非代码块"的区间 + 段落 ─────────────────────────
