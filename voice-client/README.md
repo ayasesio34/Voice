@@ -285,6 +285,34 @@ videoCodec: 'h264',                          // 硬件编码覆盖最广，保�
 
 ---
 
+## ⚠️ 打包前必须先编译原生模块
+
+`native/process-loopback` 是**进程级音频回环** —— 投屏时只录「别的程序」的声音，
+不把自己的通话声录进去。它是 **C++ 原生模块**，编译产物**不在仓库里**
+（`.gitignore` 故意排除了 `.node`：平台绑定的二进制不进版本库）。
+
+所以**新克隆下来的人必须先编译它**，否则 `npm run dist` 打出来的包
+一启动就会报找不到 `process_loopback.node`。
+
+```powershell
+cd native\process-loopback
+npm install
+npm run build
+```
+
+构建前提：
+
+| 需要 | 说明 |
+|---|---|
+| **Visual Studio Build Tools** | 勾选「使用 C++ 的桌面开发」 |
+| **Python 3** | node-gyp 要用 |
+| **node-gyp v11** | `npm install -g node-gyp@11` |
+| **网络** | 编译要下 Node 头文件，`npm run build` 已内置 `--dist-url=https://npmmirror.com/mirrors/node` |
+
+详见 [native/process-loopback/README.md](native/process-loopback/README.md)。
+
+---
+
 ## 打包
 
 ```powershell
