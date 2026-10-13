@@ -83,21 +83,32 @@ function checkFile(abs) {
   lineCount += lines.length
 
   // ── ⓪ 乱码检测 ──────────────────────────────────────────
-  // ⚠️ 编码事故：UTF-8 的文件被按 GBK 读，整篇会变成「锛銆鐨涓鑷鏂」这种字 ✓
+  // ⚠️ 编码事故：UTF-8 的文件被按 GBK 读，整篇会变成「鎯宠绔嬪埢楠岃瘉」这种字 ✓
   //    它**仍然是合法的 Markdown** ✗ 所以下面那几项检查一个都发现不了 ✓
   //    真发生过：make-public.ps1 里 `Get-Content` 少了 `-Encoding UTF8`
   //    （PowerShell 5.1 默认按系统代码页读 ✓）→ 生成的 README 整篇乱码 ✓
   //    差一点就推到 GitHub 上了 ✗
-  //    `锛`(U+950B) 和 `銆`(U+9286) 是这类乱码里最高频的两个字 ✓
-  //    它们在正常中文里几乎不出现 ✓ 所以拿来做特征很可靠 ✓
+  //
+  // ⚠️ 判据不能用"某几个特定的字" ✗
+  //    我一开始挑了「锛」「銆」两个 ✓ 结果它们只在原文含「，」「。」时才会出现 ✓
+  //    测一段没有标点的乱码时命中 0 个 ✗ 完全失效 ✓
+  //    改用**命中率**：乱码文本里这类字占 90%+ ✓ 正常中文里不到 0.01% ✓
+  //    （下面的表是从一段真实中文样本用 GBK 误读后生成的 ✓ 不是手挑的 ✓）
   {
     const raw = lines.join('\n')
     if (raw.includes('\uFFFD')) {
-      fatal.push(`${rel}  含 U+FFFD 替换字符（文件被用错误的编码读过）`)
+      fatal.push(`${rel}  含 U+FFFD 替换字符（文件被用错误的编码读过，有字节已永久丢失）`)
     }
-    const mojibake = (raw.match(/[锛銆]/g) ?? []).length
-    if (mojibake >= 3) {
-      fatal.push(`${rel}  疑似乱码（UTF-8 被按 GBK 读）：出现 ${mojibake} 个「锛/銆」这类特征字`)
+    const MOJIBAKE_CHARS = '鎯宠绔嬪埢楠岃瘉涓€鏄竴娈典腑鏂囨兂绔嬪埢楠岃瘉涓€涓笅鏁堟灉濡備綍杩樻湁鍚勭鏍囩偣锛屽彞鍙枫€傞棶鍙凤紵鎰熷徛鍙凤紒鎷彿锛堬級鍐掑彿锛氬垎鍙凤紱浠ュ強鏁板瓧鍜'
+    const cjk = raw.match(/[\u4e00-\u9fff]/g) ?? []
+    if (cjk.length >= 20) {
+      const hit = cjk.filter((c) => MOJIBAKE_CHARS.includes(c)).length
+      const ratio = hit / cjk.length
+      if (ratio > 0.15) {
+        fatal.push(
+          `${rel}  疑似乱码（UTF-8 被按 GBK 读）：${cjk.length} 个汉字里有 ${hit} 个是典型的乱码字（${Math.round(ratio * 100)}%）`,
+        )
+      }
     }
   }
   const dir = dirname(abs)

@@ -424,7 +424,7 @@ bash prune-updates.sh --yes    # 真的删
 PowerShell 会直接报 `字符串缺少终止符` 而拒绝执行。
 
 **症状**：`npm run publish:update` 报 `ParserError: 字符串缺少终止符`，并且错误信息里的
-中文显示成一堆 `鎯崇珛鍒婚獙璇�` 这样的乱码。
+中文显示成一堆 `鎯宠绔嬪埢楠岃瘉` 这样的乱码。
 
 **修法**：给文件加 UTF-8 BOM。
 
@@ -542,3 +542,4 @@ voice-client/
 ### 关于 PTT 的一个坑
 
 Electron 的 `globalShortcut` **只能注册单次触发，检测不到"按住/松开"状态**，做不了真正的按住说话。需要 `uiohook-napi` 这类全局键鼠钩子。代价是它是原生模块 —— 在国内安装时可能要去 GitHub 下预编译二进制，需要配镜像。
+
