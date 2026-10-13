@@ -1,0 +1,17 @@
+# 统一换行 —— 仓库里一律存 LF，检出时按下面的规则来
+* text=auto
+
+# ⚠️ .cmd / .bat 必须 CRLF ✗
+#    另外它们必须是**纯 ASCII**：中文注释会让 cmd.exe 把命令行从中间截断 ✗
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# shell 脚本必须 LF（CRLF 会让 bash 报 $'\r': command not found）
+*.sh text eol=lf
+
+# 这些是二进制，别碰
+*.png binary
+*.ico binary
+*.node binary
+*.exe binary
+*.dll binary
