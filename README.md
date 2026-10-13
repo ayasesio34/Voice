@@ -49,6 +49,27 @@
 - **状态** —— 「正在听」（Windows SMTC）·「正在玩」（进程 + 可共享的白名单）
 - **权限** —— 频道主 / 管理员 / 成员
 
+## 界面
+
+| 浅色 | 深色 |
+|---|---|
+| ![浅色主界面](voice-client/theme-preview/light-main.png) | ![深色主界面](voice-client/theme-preview/dark-main.png) |
+
+左边是频道列表（文字频道 / 语音频道 / 云端文件）· 中间是聊天 · 右边是成员列表 · 底部是语音状态栏。
+
+**连续消息会合并成一个气泡** —— 头像和昵称只出现在第一条上。
+同一个人的消息只要间隔在 5 分钟内、中间没人插话，就算一组。
+
+![消息分组](voice-client/theme-preview/chat-blocks.png)
+
+**投屏时观看者的头像是叠起来显示的**，鼠标移上去自动展开。
+
+![投屏观看者](voice-client/theme-preview/viewer-stack.png)
+
+**「正在听」** 会显示对方正在听什么（Windows 走 SMTC）。
+
+![正在听](voice-client/theme-preview/nowplaying.png)
+
 ## 快速开始
 
 部署看 **[voice-server/开始操作.md](voice-server/开始操作.md)** ——
