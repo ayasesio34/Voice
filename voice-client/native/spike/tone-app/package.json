@@ -1,0 +1,7 @@
+{
+  "name": "tone-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "阶段 1 测试用的最小 Electron 应用 —— 只负责播一个 1500Hz 的纯音",
+  "main": "main.js"
+}

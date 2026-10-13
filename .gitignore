@@ -1,0 +1,38 @@
+﻿# 依赖
+node_modules/
+
+# 构建产物
+out/
+release/
+dist/
+
+# 原生模块的编译中间产物
+#    ⚠️ build/Release/*.node 是**要提交**的产物（打包时要打进安装包）✗
+#       同目录下的 .obj/.pdb/.tlog 是几十 MB 的垃圾 ✓ 必须排掉 ✓
+native/**/build/*/
+native/**/build/Release/obj/
+native/**/build/Release/*.pdb
+native/**/build/Release/*.exp
+native/**/build/Release/*.lib
+native/**/build/Release/*.tlog
+native/**/build/Release/*.iobj
+native/**/build/Release/*.ipdb
+native/**/build/Release/*.lastbuildstate
+native/**/build/*.vcxproj
+native/**/build/*.sln
+native/**/build/*.props
+native/**/build/*.targets
+native/**/build/*.filters
+
+# 密钥与本地配置
+.env
+*.local
+
+# 数据（数据库、上传的文件）
+data/
+uploads/
+
+# 杂项
+*.log
+.DS_Store
+Thumbs.db

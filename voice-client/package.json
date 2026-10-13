@@ -1,0 +1,87 @@
+﻿{
+  "name": "voice-client",
+  "version": "0.43.0",
+  "private": true,
+  "description": "自建语音软件桌面客户端",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/test-dataurl.mjs && node scripts/test-links.mjs && node scripts/test-media.mjs && node scripts/test-viewers.mjs && node scripts/test-chat-groups.mjs && node scripts/test-presets.mjs",
+    "audit:contrast": "electron scripts/audit-contrast.cjs",
+    "pack": "electron-vite build && electron-builder --dir",
+    "dist": "electron-vite build && electron-builder",
+    "publish:update": "powershell -ExecutionPolicy Bypass -File scripts/publish.ps1"
+  },
+  "dependencies": {
+    "electron-updater": "^6.0.0",
+    "livekit-client": "^2.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.4.11",
+    "electron-builder": "^25.0.0",
+    "electron-vite": "^2.3.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.7.0",
+    "vite": "^5.4.0"
+  },
+  "build": {
+    "appId": "com.example.voiceclient",
+    "productName": "Voice",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "resources/**/*",
+      "native/process-loopback/index.js",
+      "native/process-loopback/build/Release/*.node",
+      "!native/process-loopback/{src,build/Release/obj,build/Release/*.pdb,node_modules}"
+    ],
+    "asarUnpack": [
+      "native/process-loopback/build/Release/*.node",
+      "resources/media-session/*"
+    ],
+    "artifactName": "${productName}-v${version}-setup.${ext}",
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "http://YOUR_SERVER_IP:17706/updates"
+      }
+    ],
+    "win": {
+      "icon": "resources/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Voice"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ]
+    }
+  }
+}

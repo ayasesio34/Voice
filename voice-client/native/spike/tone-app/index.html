@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Electron 测试音</title>
+    <style>
+      body {
+        font: 14px/1.7 system-ui, 'Microsoft YaHei', sans-serif;
+        background: #1e1f22;
+        color: #dbdee1;
+        margin: 0;
+        padding: 18px 20px;
+      }
+      .big {
+        font-size: 20px;
+        font-weight: 600;
+      }
+      #status {
+        margin-top: 10px;
+        color: #f0b232;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="big">🎵 1500 Hz</div>
+    <div id="status">正在启动…</div>
+
+    <script>
+      // ⚠️ 用 Web Audio **现场合成**，不读 WAV 文件 ——
+      //    这样这个 app 是完全自包含的，不用管相对路径，
+      //    也不会因为文件缺失而静默变成"没声音"（那会让整个测试得出错误结论）。
+      const st = document.getElementById('status')
+
+      try {
+        const ctx = new AudioContext()
+        const osc = ctx.createOscillator()
+        const gain = ctx.createGain()
+
+        osc.type = 'sine'
+        osc.frequency.value = 1500
+        gain.gain.value = 0.35
+
+        osc.connect(gain)
+        gain.connect(ctx.destination)
+        osc.start()
+
+        ctx
+          .resume()
+          .then(() => {
+            st.textContent = '🔊 正在播放 —— 这个声音应该被录不到'
+            st.style.color = '#23a55a'
+            // 打到 stdout，方便外层脚本确认"确实在放"
+            console.log('TONE_PLAYING ctxState=' + ctx.state)
+          })
+          .catch((err) => {
+            st.textContent = '❌ AudioContext 启动失败：' + err.message
+            st.style.color = '#f23f43'
+            console.error('TONE_FAILED', err)
+          })
+      } catch (err) {
+        st.textContent = '❌ 初始化失败：' + err.message
+        st.style.color = '#f23f43'
+        console.error('TONE_FAILED', err)
+      }
+    </script>
+  </body>
+</html>

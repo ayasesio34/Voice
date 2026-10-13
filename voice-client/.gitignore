@@ -1,0 +1,41 @@
+# 依赖
+node_modules/
+
+# 构建产物
+out/
+release/
+
+# 原生插件的编译产物 —— **全部不提交** ✗
+#
+# ⚠️ 这里以前写的是"build/Release/*.node 是要提交的产物"✗
+#    但规则本身（下面第一行 build/*/）把 Release/ 整个排掉了 ✓
+#    注释和规则自相矛盾 —— 而且**注释是错的那一方** ✓
+#
+# 为什么不提交 .node ✗：
+#   · 它是 **Windows x64 的编译产物** ✓ 提交进仓库等于钉死一个平台 ✗
+#   · 只有 195 KB 但没有任何可读性 ✓ 每次重编译都会产生 diff 噪音 ✗
+#   · **源码齐全**（src/process_loopback.cc + binding.gyp + README.md 的编译说明）✓
+#     别人 `cd native/process-loopback && npm install && npm run build` 就能生成 ✓
+#
+# ⚠️ 所以：**想打包安装包的人必须先编译原生模块** ✗
+#    否则 electron-builder 会找不到 .node ✓ 打出来的包一启动就报错 ✓
+native/process-loopback/build/*/
+native/process-loopback/build/Release/obj/
+native/process-loopback/build/Release/*.pdb
+native/process-loopback/build/Release/*.exp
+native/process-loopback/build/Release/*.lib
+native/process-loopback/build/Release/*.iobj
+native/process-loopback/build/Release/*.ipdb
+native/process-loopback/build/Release/*.tlog
+native/process-loopback/build/Release/*.lastbuildstate
+native/process-loopback/build/Release/process_loopback.node.manifest
+native/process-loopback/build/configure*
+native/process-loopback/build/*.vcxproj
+native/process-loopback/build/*.sln
+native/process-loopback/build/*.props
+native/process-loopback/build/*.targets
+native/process-loopback/build/*.filters
+
+# spike 的编译产物（源码保留，二进制不用）
+native/spike/spike.exe
+native/spike/spike.obj

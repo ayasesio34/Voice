@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>截图</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #000;
+        cursor: crosshair;
+        user-select: none;
+      }
+
+      /* 冻结的整屏截图。铺满窗口 —— 缩略图的宽高比和显示器一致，
+         所以拉伸不会变形（裁剪时的换算也用同样的比例） */
+      #shot {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+        -webkit-user-drag: none;
+      }
+
+      /* 选区。
+         变暗效果用一个超大 box-shadow 实现 —— 比铺四块遮罩省事得多，
+         而且选区一变暗区自动跟着变，不用同步。
+         pointer-events: none 是为了让"在已有选区里再拖"也当作重新框选，
+         行为可预测。 */
+      #sel {
+        position: absolute;
+        display: none;
+        pointer-events: none;
+        border: 1px solid #5865f2;
+        box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
+        z-index: 1;
+      }
+
+      /* 尺寸标签跟在选区左上角外面 */
+      #size {
+        position: absolute;
+        z-index: 3;
+        padding: 2px 7px;
+        border-radius: 3px;
+        background: rgba(0, 0, 0, 0.75);
+        color: #fff;
+        font: 12px/1.6 ui-monospace, Consolas, monospace;
+        white-space: nowrap;
+        pointer-events: none;
+        display: none;
+      }
+
+      /* 顶部操作条 */
+      #bar {
+        position: absolute;
+        top: 18px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 4;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+        border-radius: 8px;
+        background: rgba(30, 31, 34, 0.96);
+        color: #dbdee1;
+        font: 13px/1.4 system-ui, 'Microsoft YaHei', sans-serif;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+        cursor: default;
+      }
+
+      #bar .tip {
+        color: #949ba4;
+      }
+
+      #bar button {
+        padding: 4px 14px;
+        border: 0;
+        border-radius: 4px;
+        background: #4e5058;
+        color: #fff;
+        font-size: 13px;
+        cursor: pointer;
+      }
+
+      #bar button:hover:not(:disabled) {
+        background: #5d6069;
+      }
+
+      #bar button:disabled {
+        opacity: 0.45;
+        cursor: default;
+      }
+
+      #bar button.primary {
+        background: #5865f2;
+      }
+
+      #bar button.primary:hover:not(:disabled) {
+        background: #4752c4;
+      }
+    </style>
+  </head>
+  <body>
+    <img id="shot" alt="" />
+    <div id="sel"></div>
+    <div id="size"></div>
+
+    <div id="bar">
+      <span class="tip" id="tip">拖动鼠标框选要截的区域</span>
+      <button id="ok" class="primary" disabled>完成</button>
+      <button id="no">取消</button>
+    </div>
+
+    <script type="module">
+      const img = document.getElementById('shot')
+      const sel = document.getElementById('sel')
+      const sizeEl = document.getElementById('size')
+      const tipEl = document.getElementById('tip')
+      const okBtn = document.getElementById('ok')
+      const noBtn = document.getElementById('no')
+
+      /** 拖拽起点（CSS 像素） */
+      let anchor = null
+      /** 当前选区 {x, y, w, h}，单位 CSS 像素 */
+      let rect = null
+
+      window.shotApi.onInit(({ dataUrl }) => {
+        // 图和窗口尺寸都确定了再通知主进程显示 —— 否则会先闪一下黑屏
+        img.onload = () => window.shotApi.ready()
+        img.src = dataUrl
+      })
+
+      /** CSS 像素 -> 图片像素的比例。图片被拉伸铺满窗口，所以按宽高分别算 */
+      function ratio() {
+        const rx = img.clientWidth ? img.naturalWidth / img.clientWidth : 1
+        const ry = img.clientHeight ? img.naturalHeight / img.clientHeight : 1
+        return { rx, ry }
+      }
+
+      function render() {
+        if (!rect || rect.w < 1 || rect.h < 1) {
+          sel.style.display = 'none'
+          sizeEl.style.display = 'none'
+          okBtn.disabled = true
+          tipEl.textContent = '拖动鼠标框选要截的区域'
+          return
+        }
+
+        sel.style.display = 'block'
+        sel.style.left = rect.x + 'px'
+        sel.style.top = rect.y + 'px'
+        sel.style.width = rect.w + 'px'
+        sel.style.height = rect.h + 'px'
+
+        const { rx, ry } = ratio()
+        const realW = Math.round(rect.w * rx)
+        const realH = Math.round(rect.h * ry)
+
+        // 标签放在选区上方；贴到屏幕顶端时改放到选区里面
+        sizeEl.style.display = 'block'
+        sizeEl.textContent = realW + ' × ' + realH
+        sizeEl.style.left = rect.x + 'px'
+        sizeEl.style.top = rect.y > 26 ? rect.y - 24 + 'px' : rect.y + 4 + 'px'
+
+        okBtn.disabled = realW < 2 || realH < 2
+        tipEl.textContent = '回车确认 · Esc 取消 · 双击选区内也可以'
+      }
+
+      document.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return
+        // 点操作条不算框选
+        if (e.target.closest && e.target.closest('#bar')) return
+
+        anchor = { x: e.clientX, y: e.clientY }
+        rect = { x: e.clientX, y: e.clientY, w: 0, h: 0 }
+        render()
+      })
+
+      document.addEventListener('mousemove', (e) => {
+        if (!anchor) return
+
+        // 支持往任意方向拖
+        rect = {
+          x: Math.min(anchor.x, e.clientX),
+          y: Math.min(anchor.y, e.clientY),
+          w: Math.abs(e.clientX - anchor.x),
+          h: Math.abs(e.clientY - anchor.y),
+        }
+        render()
+      })
+
+      document.addEventListener('mouseup', () => {
+        anchor = null
+      })
+
+      document.addEventListener('dblclick', (e) => {
+        if (e.target.closest && e.target.closest('#bar')) return
+        submit()
+      })
+
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          window.shotApi.cancel()
+        } else if (e.key === 'Enter') {
+          submit()
+        }
+      })
+
+      okBtn.addEventListener('click', submit)
+      noBtn.addEventListener('click', () => window.shotApi.cancel())
+
+      function submit() {
+        if (!rect || rect.w < 1 || rect.h < 1) return
+
+        const { rx, ry } = ratio()
+        const sx = Math.round(rect.x * rx)
+        const sy = Math.round(rect.y * ry)
+        const sw = Math.max(1, Math.round(rect.w * rx))
+        const sh = Math.max(1, Math.round(rect.h * ry))
+
+        // 直接原图裁剪 —— 不用缩放，出来的就是原生分辨率的截图
+        const canvas = document.createElement('canvas')
+        canvas.width = sw
+        canvas.height = sh
+        canvas.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh)
+
+        window.shotApi.done({
+          dataUrl: canvas.toDataURL('image/png'),
+          width: sw,
+          height: sh,
+        })
+      }
+    </script>
+  </body>
+</html>

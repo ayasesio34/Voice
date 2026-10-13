@@ -1,0 +1,19 @@
+# 密钥，绝对不要提交
+.env
+
+# livekit/livekit.yaml 里也含密钥，但它是跑起来必需的文件，
+# 所以默认提交一份带 REPLACE_API_KEY 占位符的模板。
+# 如果你跑过 init.sh（占位符已被替换成真实密钥），
+# 请把下面这行的注释去掉，避免把密钥提交进仓库：
+# livekit/livekit.yaml
+
+# 数据
+data/
+
+# 依赖
+node_modules/
+dist/
+
+# 杂项
+*.log
+.DS_Store

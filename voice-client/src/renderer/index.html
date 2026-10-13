@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Voice</title>
+
+    <!--
+      ⚠️ 主题必须在**首屏绘制之前**定下来，否则会先闪一下深色再变浅色。
+
+      React 挂载之后再设 data-theme 已经晚了：那时候第一帧已经画出来了。
+      所以这里用一段内联脚本抢在前面 —— script-src 里有 'unsafe-inline'，
+      所以 CSP 放行（见下面的说明）。
+
+      key 必须和 src/renderer/src/lib/theme.ts 里的 THEME_KEY 一致。
+    -->
+    <script>
+      try {
+        if (localStorage.getItem('voice.theme') === 'light') {
+          document.documentElement.dataset.theme = 'light'
+        }
+      } catch (e) {
+        /* 存储不可用就用默认的深色 */
+      }
+    </script>
+    <!--
+      CSP 说明（改之前先读完）：
+
+      · connect-src 必须放开 ws:/wss:/http:/https:
+        因为服务端地址是用户在设置里自己填的，没法预先枚举。
+        不放开的话 fetch(token) 和 WebSocket 会被静默拦截，表现为
+        "一直连不上"但控制台只有一条 CSP 报错 —— 很难查。
+
+      · img-src 同样必须放开 http:/https:  ← ⚠️ 很容易漏
+        聊天里的图片附件是 <img src="http://<服务端>/api/files/xxx">，
+        和页面本身**不同源**。
+        漏掉的后果特别迷惑：上传明明成功了（消息发得出去），
+        但 <img> 加载失败触发 onError，界面显示成「**已被删除**」——
+        看起来像文件真的被删了，其实是被 CSP 拦了。
+
+        注意 `img-src` 里的 `data:` 管不到 `fetch`，反过来 `connect-src`
+        也管不到 `<img>` —— 这两个指令各管各的，别以为放开一个就够了。
+        （截图功能就栽在另一头：对 data: URL 调 fetch，被 connect-src 拦。）
+
+      · script-src 需要 'unsafe-inline'
+        开发模式下 @vitejs/plugin-react 会往 HTML 里注入一段内联的
+        React Refresh 前导脚本；不允许内联的话页面直接白屏。
+
+      这是一个只加载本地资源、且关闭了 nodeIntegration 的桌面应用，
+      这几处放宽的代价可以接受。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data: blob: http: https:; media-src 'self' blob: mediastream:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self' http: https: ws: wss:"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

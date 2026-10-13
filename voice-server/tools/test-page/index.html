@@ -1,0 +1,631 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M1 验收测试页 — 语音 + 1080p60 屏幕共享</title>
+<style>
+  :root {
+    --bg: #1e1f22; --panel: #2b2d31; --panel2: #313338;
+    --text: #dbdee1; --muted: #949ba4; --accent: #5865f2;
+    --ok: #23a55a; --warn: #f0b232; --err: #f23f43;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 20px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+  .card { background: var(--panel); border-radius: 8px; padding: 16px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; margin: 0 0 12px; color: var(--muted);
+             text-transform: uppercase; letter-spacing: .04em; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  input, select {
+    width: 100%; padding: 7px 9px; border-radius: 4px; border: 1px solid #1a1b1e;
+    background: #1e1f22; color: var(--text); font-size: 13px;
+  }
+  button {
+    padding: 8px 14px; border-radius: 4px; border: 0; cursor: pointer;
+    background: var(--accent); color: #fff; font-size: 13px; font-weight: 500;
+  }
+  button:hover { filter: brightness(1.1); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.ghost { background: #4e5058; }
+  button.danger { background: var(--err); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+  .videos { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }
+  .tile { background: #000; border-radius: 6px; overflow: hidden; position: relative; }
+  .tile video { width: 100%; display: block; }
+  .tile .tag {
+    position: absolute; left: 6px; top: 6px; background: rgba(0,0,0,.65);
+    padding: 2px 7px; border-radius: 3px; font-size: 11px;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid #3a3c42; }
+  th { color: var(--muted); font-weight: 500; }
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 9px; font-size: 11px; }
+  .pill.ok { background: rgba(35,165,90,.18); color: var(--ok); }
+  .pill.warn { background: rgba(240,178,50,.18); color: var(--warn); }
+  .pill.err { background: rgba(242,63,67,.18); color: var(--err); }
+  #log {
+    background: #111214; border-radius: 5px; padding: 10px; height: 150px;
+    overflow-y: auto; font: 12px/1.5 Consolas, "Courier New", monospace;
+    white-space: pre-wrap; color: var(--muted);
+  }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  code { background: #1e1f22; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>M1 验收测试页</h1>
+  <div class="sub">
+    用 <code>http://localhost</code> 打开本页（localhost 算安全上下文），
+    即可在<b>没有域名、没有证书</b>的情况下连接 <code>ws://你的服务器IP:7880</code>。
+  </div>
+
+  <div class="card">
+    <h2>连接</h2>
+    <div class="grid">
+      <div><label>LiveKit URL</label><input id="lkUrl" value="ws://YOUR_SERVER_IP:17707"></div>
+      <div><label>后端地址</label><input id="apiUrl" value="http://YOUR_SERVER_IP:17706"></div>
+      <div><label>邀请码</label><input id="invite" placeholder=".env 里的 INVITE_CODE"></div>
+      <div><label>房间 / 频道</label><input id="room" value="test"></div>
+      <div><label>昵称</label><input id="name" value="我"></div>
+    </div>
+    <div class="row">
+      <button id="btnConnect">连接</button>
+      <button id="btnMic" class="ghost" disabled>开麦</button>
+      <button id="btnCam" class="ghost" disabled>开摄像头</button>
+      <button id="btnScreen" class="ghost" disabled>共享屏幕</button>
+      <button id="btnDisconnect" class="danger" disabled>断开</button>
+      <span id="state" class="pill err">未连接</span>
+    </div>
+
+    <div class="grid" style="margin-top:12px">
+      <div>
+        <label>共享画质档位</label>
+        <select id="preset">
+          <option value="720_30_2500">720p30 · 2.5 Mbps（省流）</option>
+          <option value="1080_30_5000" selected>1080p30 · 5 Mbps（标准）</option>
+          <option value="1080_60_8000">1080p60 · 8 Mbps（流畅）</option>
+          <option value="1080_60_12000">1080p60 · 12 Mbps（高画质）</option>
+        </select>
+      </div>
+      <div>
+        <label>编码器</label>
+        <select id="codec">
+          <option value="h264" selected>H.264（硬件编码覆盖最广，推荐）</option>
+          <option value="vp9">VP9（压缩好，但多数机器软件编码）</option>
+          <option value="vp8">VP8（兼容性兜底）</option>
+        </select>
+      </div>
+      <div>
+        <label>内容提示 contentHint</label>
+        <select id="contentHint">
+          <option value="text" selected>text（文字优先，屏幕共享必选）</option>
+          <option value="detail">detail</option>
+          <option value="">不设置（对照组）</option>
+        </select>
+      </div>
+    </div>
+    <div class="hint">
+      共享前请先选好档位和编码器 —— 它们只在 <b>开始共享时</b> 生效，改完要停止再重新共享。
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>画面</h2>
+    <div class="videos" id="videos">
+      <div class="hint">还没连接。连接后这里会显示屏幕共享和摄像头画面。</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>实时统计（这是验收 M3 的关键面板）</h2>
+    <table>
+      <thead>
+        <tr><th>方向</th><th>参与者</th><th>类型</th><th>编码</th><th>分辨率</th>
+            <th>帧率</th><th>码率</th><th>丢包</th></tr>
+      </thead>
+      <tbody id="stats"><tr><td colspan="8" class="hint">—</td></tr></tbody>
+    </table>
+    <div class="hint" style="margin-top:10px">
+      看 <b>方向=发送 / 类型=屏幕</b> 那一行：<br>
+      · 分辨率要是 <code>1920×1080</code>，帧率要接近你选的档位（60 或 30）<br>
+      · 码率要稳定在设定值的 ±15% 以内<br>
+      · 如果帧率明显低于档位 → 编码器扛不住，换 H.264 或降档<br>
+      · 如果分辨率被自动降到 1280×720 → <code>maintain-resolution</code> 没生效，文字会糊<br>
+      · <b>⚠️ 屏幕内容不动的时候，帧率和码率会掉到 0 —— 这是正常的</b>。
+      屏幕捕获只在画面变化时才产生帧。所以<b>要测性能，请一边共享一边持续动鼠标 / 滚页面 / 放视频</b>，
+      盯着静止的桌面只会看到 0。
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>文字频道（验证后端 WebSocket）</h2>
+    <div id="log"></div>
+    <div class="row">
+      <input id="chatInput" placeholder="说点什么…" style="flex:1; min-width:200px" disabled>
+      <button id="btnSend" class="ghost" disabled>发送</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── CDN 加载（带多重回退，国内网络下 jsDelivr / unpkg 有一个能通就行）──
+window.__lkReady = (async () => {
+  const urls = [
+    'https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js',
+    'https://unpkg.com/livekit-client@2/dist/livekit-client.umd.min.js',
+    'https://cdn.jsdelivr.net/npm/livekit-client@2.9.0/dist/livekit-client.umd.min.js',
+  ];
+  for (const url of urls) {
+    try {
+      await new Promise((res, rej) => {
+        const s = document.createElement('script');
+        s.src = url; s.onload = res; s.onerror = () => rej(new Error(url));
+        document.head.appendChild(s);
+      });
+      if (window.LivekitClient) return window.LivekitClient;
+    } catch { /* 换下一个源 */ }
+  }
+  throw new Error(
+    '无法从 CDN 加载 livekit-client。请改用 npm 方式：\n' +
+    '  npm i livekit-client vite && npx vite\n' +
+    '然后把本页的 import 换成 from "livekit-client"。'
+  );
+})();
+</script>
+
+<script type="module">
+// ═══════════════════════════════════════════════════════════
+// 状态
+// ═══════════════════════════════════════════════════════════
+let LK, room = null, ws = null, myName = '我';
+const statsHistory = new Map();   // key -> { bytes, ts }
+const $ = (id) => document.getElementById(id);
+
+/**
+ * 解析画质档位。
+ * 下拉框 option 的 value 形如 "1080_60_8000"，含义是：
+ *     <纵向分辨率>_<帧率>_<码率kbps>
+ * 所以 1080 是"1080p"里的 1080，不是宽度；宽度按 16:9 换算出来。
+ * （之前这里错写成 [w,h,fps,kbps] 四个变量去接三个值，
+ *   结果请求了"1080×30 分辨率、5000fps、NaN 码率"，编码器直接罢工。）
+ */
+function readPreset() {
+  const [height, fps, kbps] = $('preset').value.split('_').map(Number);
+  return {
+    width: Math.round((height * 16) / 9),
+    height,
+    fps,
+    kbps,
+  };
+}
+
+function log(line) {
+  const el = $('log');
+  const t = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  el.textContent += `[${t}] ${line}\n`;
+  el.scrollTop = el.scrollHeight;
+}
+
+function setState(text, kind) {
+  const el = $('state');
+  el.textContent = text;
+  el.className = 'pill ' + (kind || 'warn');
+}
+
+$('preset').addEventListener('change', () => {
+  if (room) log('档位已改，需要停止共享再重新共享才会生效');
+});
+
+// ═══════════════════════════════════════════════════════════
+// 连接
+// ═══════════════════════════════════════════════════════════
+$('btnConnect').onclick = async () => {
+  try {
+    setState('加载 SDK…', 'warn');
+    LK = await window.__lkReady;
+    log(`livekit-client 加载成功`);
+
+    const apiUrl = $('apiUrl').value.replace(/\/+$/, '');
+    const roomName = $('room').value.trim() || 'test';
+    myName = $('name').value.trim() || '我';
+
+    setState('取 token…', 'warn');
+    const res = await fetch(`${apiUrl}/api/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        inviteCode: $('invite').value.trim(),
+        room: roomName,
+        name: myName,
+      }),
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(`取 token 失败 HTTP ${res.status}：${t}`);
+    }
+    const { token, url, identity } = await res.json();
+    log(`拿到 token，identity=${identity ?? '?'}`);
+
+    // URL 优先用表单里填的，后端没配 LIVEKIT_URL 时后端会返回空
+    const lkUrl = $('lkUrl').value.trim() || url;
+
+    const { Room, RoomEvent, Track } = LK;
+    const preset = readPreset();
+    const codec = $('codec').value;
+
+    room = new Room({
+      adaptiveStream: true,
+      dynacast: true,
+      publishDefaults: {
+        videoCodec: codec,
+        dtx: true,
+        red: true,
+        screenShareEncoding: {
+          maxBitrate: preset.kbps * 1000,
+          maxFramerate: preset.fps,
+          priority: 'high',
+        },
+        screenShareSimulcastLayers: [],       // 关闭屏幕共享 simulcast
+        degradationPreference: 'maintain-resolution',
+      },
+    });
+
+    room
+      .on(RoomEvent.Connected, () => {
+        setState('已连接', 'ok');
+        log(`已连接房间 ${roomName}`);
+        for (const id of ['btnMic', 'btnCam', 'btnScreen', 'btnDisconnect']) $(id).disabled = false;
+        $('btnConnect').disabled = true;
+        $('videos').innerHTML =
+          '<div class="hint">已连接。点「共享屏幕」或「开摄像头」，画面会出现在这里。</div>';
+      })
+      .on(RoomEvent.SignalReconnecting, () => log('⚠️ 信令连接不稳，正在重连…'))
+      .on(RoomEvent.Reconnecting, () => {
+        setState('重连中…', 'warn');
+        log('⚠️ 媒体连接不稳，正在重连…');
+      })
+      .on(RoomEvent.Reconnected, () => {
+        setState('已连接', 'ok');
+        log('✅ 重连成功');
+      })
+      .on(RoomEvent.Disconnected, (reason) => {
+        const name = LK.DisconnectReason?.[reason] ?? '未知';
+        setState('已断开', 'err');
+        log(`❌ 已断开 —— 原因码 ${reason}（${name}）`);
+        teardown();
+      })
+      .on(RoomEvent.LocalTrackUnpublished, (pub) => {
+        log(`⚠️ 本地轨道取消发布：${pub.source} / ${pub.trackName || ''}`);
+      })
+      .on(RoomEvent.TrackMuted, (pub, p) => {
+        if (p?.identity !== room.localParticipant.identity) return;
+        log(`本地轨道被静音：${pub.source}`);
+      })
+      .on(RoomEvent.ParticipantConnected, (p) => log(`+ ${p.name || p.identity} 加入`))
+      .on(RoomEvent.ParticipantDisconnected, (p) => {
+        log(`- ${p.name || p.identity} 离开`);
+        removeTiles(p.identity);
+      })
+      .on(RoomEvent.TrackSubscribed, (track, pub, participant) => {
+        log(`订阅 ${track.kind} ← ${participant.name || participant.identity}`);
+        attachTile(track, participant);
+      })
+      .on(RoomEvent.TrackUnsubscribed, (track, pub, participant) => {
+        track.detach().forEach((el) => el.remove());
+        removeTiles(participant.identity, track.source);
+      })
+      .on(RoomEvent.LocalTrackPublished, (pub) => {
+        log(`本地发布：${pub.source} / ${pub.trackName || ''}`);
+        if (pub.source === Track.Source.ScreenShare && pub.track) {
+          // 把采集侧的真实参数打出来 —— 这是区分
+          // 「采集没画面」和「编码器罢工」的关键证据
+          const mt = pub.track.mediaStreamTrack;
+          if (mt) {
+            const s = mt.getSettings?.() ?? {};
+            log(
+              `  采集设置：${s.width ?? '?'}×${s.height ?? '?'}@${s.frameRate ?? '?'}fps` +
+                ` readyState=${mt.readyState} muted=${mt.muted} enabled=${mt.enabled}`
+            );
+            if (!s.width || !s.height) {
+              log('  ⚠️ 采集到的分辨率为空 —— 屏幕捕获本身失败了，不是编码问题');
+            }
+            if (mt.readyState === 'ended') {
+              log('  ⚠️ 采集轨道已结束 —— 共享被系统或用户中止了');
+            }
+          }
+          attachTile(pub.track, room.localParticipant, true);
+        }
+      })
+      .on(RoomEvent.ConnectionQualityChanged, (q, p) => {
+        log(`网络质量 ${p.identity}: ${q}`);
+      });
+
+    await room.connect(lkUrl, token);
+    log(`信令地址 ${lkUrl}`);
+
+    connectChat(apiUrl, roomName);
+  } catch (err) {
+    setState('失败', 'err');
+    log('❌ ' + (err?.message || err));
+    console.error(err);
+  }
+};
+
+// ═══════════════════════════════════════════════════════════
+// 轨道开关
+// ═══════════════════════════════════════════════════════════
+$('btnMic').onclick = async () => {
+  const on = room.localParticipant.isMicrophoneEnabled;
+  await room.localParticipant.setMicrophoneEnabled(!on);
+  $('btnMic').textContent = !on ? '关麦' : '开麦';
+  log(!on ? '麦克风已开' : '麦克风已关');
+};
+
+$('btnCam').onclick = async () => {
+  const on = room.localParticipant.isCameraEnabled;
+  await room.localParticipant.setCameraEnabled(!on);
+  $('btnCam').textContent = !on ? '关摄像头' : '开摄像头';
+};
+
+$('btnScreen').onclick = async () => {
+  const { Track } = LK;
+  const sharing = Boolean(
+    room.localParticipant.getTrackPublication(Track.Source.ScreenShare)
+  );
+  if (sharing) {
+    await room.localParticipant.setScreenShareEnabled(false);
+    $('btnScreen').textContent = '共享屏幕';
+    log('停止共享');
+    return;
+  }
+
+  const preset = readPreset();
+  const hint = $('contentHint').value;
+  log(`开始共享：${preset.width}×${preset.height}@${preset.fps} / ${preset.kbps}kbps / ${$('codec').value} / contentHint=${hint || '无'}`);
+
+  await room.localParticipant.setScreenShareEnabled(true, {
+    audio: true,
+    resolution: { width: preset.width, height: preset.height, frameRate: preset.fps },
+    // 让用户能自己选屏幕还是窗口，并且别把本页自己共享进去
+    surfaceSwitching: 'include',
+    selfBrowserSurface: 'exclude',
+  });
+
+  // contentHint 必须在采集之后、编码开始之前设
+  const pub = room.localParticipant.getTrackPublication(Track.Source.ScreenShare);
+  if (pub?.track && hint) {
+    const mt = pub.track.mediaStreamTrack;
+    if (mt) {
+      try {
+        mt.contentHint = hint;
+        log(`已设置 contentHint = ${hint}（这是文字清晰度的关键）`);
+      } catch (e) {
+        log(`设置 contentHint 失败：${e.message}`);
+      }
+    }
+  }
+
+  $('btnScreen').textContent = '停止共享';
+};
+
+$('btnDisconnect').onclick = async () => {
+  await room?.disconnect();
+  teardown();
+};
+
+function teardown() {
+  try { ws?.close(); } catch {}
+  ws = null;
+  room = null;
+  for (const id of ['btnMic', 'btnCam', 'btnScreen', 'btnDisconnect']) $(id).disabled = true;
+  for (const id of ['btnConnect']) $(id).disabled = false;
+  $('chatInput').disabled = true;
+  $('btnSend').disabled = true;
+  $('videos').innerHTML = '<div class="hint">已断开。</div>';
+  $('stats').innerHTML = '<tr><td colspan="8" class="hint">—</td></tr>';
+  statsHistory.clear();
+}
+
+// ═══════════════════════════════════════════════════════════
+// 画面渲染
+// ═══════════════════════════════════════════════════════════
+function attachTile(track, participant, local = false) {
+  const id = `tile-${participant.identity}-${track.source}`;
+  let tile = document.getElementById(id);
+  if (!tile) {
+    tile = document.createElement('div');
+    tile.className = 'tile';
+    tile.id = id;
+    const tag = document.createElement('div');
+    tag.className = 'tag';
+    tag.textContent = `${participant.name || participant.identity}${local ? '（我）' : ''} · ${track.source}`;
+    tile.appendChild(tag);
+    $('videos').appendChild(tile);
+    const placeholder = $('videos').querySelector('.hint');
+    if (placeholder) placeholder.remove();
+  }
+  const el = track.attach();
+  el.style.width = '100%';
+  el.style.display = 'block';
+  if (track.kind === 'audio') el.style.display = 'none';
+  tile.appendChild(el);
+}
+
+function removeTiles(identity, source) {
+  const sel = source ? `#tile-${CSS.escape(identity)}-${CSS.escape(source)}`
+                     : `[id^="tile-${CSS.escape(identity)}-"]`;
+  document.querySelectorAll(sel).forEach((el) => el.remove());
+}
+
+// ═══════════════════════════════════════════════════════════
+// 统计面板 —— M3 验收就靠这个
+// ═══════════════════════════════════════════════════════════
+async function collectStats() {
+  if (!room) return;
+  const rows = [];
+  const all = [
+    { label: '发送', pub: room.localParticipant.trackPublications },
+  ];
+  for (const p of room.remoteParticipants.values()) {
+    all.push({ label: '接收', pub: p.trackPublications, who: p.name || p.identity });
+  }
+
+  for (const group of all) {
+    for (const pub of group.pub.values()) {
+      const track = pub.track;
+      if (!track) continue;
+      const kind = track.source === 'screen_share' ? '屏幕'
+                 : track.source === 'screen_share_audio' ? '屏幕音'
+                 : track.kind === 'video' ? '摄像头' : '音频';
+      let report;
+      try { report = await track.getRTCStatsReport(); } catch { continue; }
+      if (!report) continue;
+
+      const direction = group.label === '发送' ? 'outbound-rtp' : 'inbound-rtp';
+      let entry = null;
+      for (const s of report.values()) {
+        if (s.type === direction && s.kind === track.kind) { entry = s; break; }
+      }
+      if (!entry) {
+        // 轨道存在但 RTC 统计里还没有对应条目 —— 也要显示出来，
+        // 否则"没有画面"时用户会以为整个页面坏了，无从判断
+        rows.push({
+          dir: group.label,
+          who: group.who || myName,
+          kind,
+          codec: '—',
+          res: '—',
+          fps: '—',
+          kbps: '—',
+          loss: '—',
+          limitReason: '—',
+          targetBitrate: '—',
+        });
+        continue;
+      }
+
+      const bytes = group.label === '发送' ? entry.bytesSent : entry.bytesReceived;
+      const key = `${group.label}-${track.sid || track.source}`;
+      const prev = statsHistory.get(key);
+      const now = performance.now();
+      let kbps = null;
+      if (prev && now > prev.ts) {
+        kbps = Math.max(0, ((bytes - prev.bytes) * 8) / (now - prev.ts));
+      }
+      statsHistory.set(key, { bytes, ts: now });
+
+      let codecName = '—';
+      const codec = [...report.values()].find((s) => s.id === entry.codecId);
+      if (codec?.mimeType) codecName = codec.mimeType.replace('video/', '').replace('audio/', '');
+
+      rows.push({
+        dir: group.label,
+        who: group.who || myName,
+        kind,
+        codec: codecName,
+        res: entry.frameWidth ? `${entry.frameWidth}×${entry.frameHeight}` : '—',
+        fps: entry.framesPerSecond != null ? entry.framesPerSecond.toFixed(0) : '—',
+        kbps: kbps != null ? kbps.toFixed(0) : '…',
+        loss: entry.packetsLost != null ? String(entry.packetsLost) : '—',
+        // Chromium 会告诉你编码器为什么被限制：
+        //   none / cpu / bandwidth / other
+        // 这是区分「机器扛不住」和「网络被判定为拥堵」的唯一可靠依据
+        limitReason: entry.qualityLimitationReason ?? '—',
+        targetBitrate:
+          entry.targetBitrate != null ? Math.round(entry.targetBitrate / 1000) : '—',
+      });
+    }
+  }
+
+  const tbody = $('stats');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="hint">等待轨道…</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map((r) => {
+    const bad = r.kind === '屏幕' && r.fps !== '—' && Number(r.fps) < 25;
+    return `<tr>
+      <td>${r.dir}</td><td>${r.who}</td>
+      <td>${r.kind}</td><td>${r.codec}</td>
+      <td>${r.res}</td>
+      <td class="${bad ? 'pill warn' : ''}">${r.fps}</td>
+      <td>${r.kbps} kbps</td><td>${r.loss}</td>
+    </tr>`;
+  }).join('');
+
+  // 每 4 次采样（约 6 秒）往日志里写一行快照。
+  // 这样「跑一会儿就退化」的过程会留在日志里，事后能看出趋势，
+  // 不用一直盯着统计表。
+  statsTick += 1;
+  if (statsTick % 4 === 0) {
+    log(
+      '[统计] ' +
+        rows
+          .map(
+            (r) =>
+              `${r.kind} ${r.res} ${r.fps}fps 实际${r.kbps}kbps 目标${r.targetBitrate}kbps 限制=${r.limitReason}`
+          )
+          .join('   |   ')
+    );
+  }
+}
+
+let statsTick = 0;
+setInterval(collectStats, 1500);
+
+// ═══════════════════════════════════════════════════════════
+// 文字频道
+// ═══════════════════════════════════════════════════════════
+function connectChat(apiUrl, roomName) {
+  const wsUrl = apiUrl.replace(/^http/, 'ws') + '/ws?name=' + encodeURIComponent(myName);
+  try {
+    ws = new WebSocket(wsUrl);
+  } catch (e) {
+    log(`聊天 WebSocket 建连失败：${e.message}`);
+    return;
+  }
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type: 'hello', name: myName }));
+    $('chatInput').disabled = false;
+    $('btnSend').disabled = false;
+    log('文字频道已连接');
+  };
+  ws.onmessage = (ev) => {
+    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    if (m.type === 'welcome') {
+      log(`文字频道就绪，频道：${m.channels.map((c) => c.name).join(', ')}`);
+    } else if (m.type === 'message' && m.message.channel_id === roomName) {
+      log(`${m.message.author_name}: ${m.message.body}`);
+    } else if (m.type === 'presence') {
+      log(`在线：${m.online.map((o) => o.name).join(', ') || '无'}`);
+    } else if (m.type === 'error') {
+      log(`⚠️ 服务端错误：${m.error}`);
+    }
+  };
+  ws.onerror = () => log('⚠️ 文字频道连接出错（后端跑起来了吗？）');
+  ws.onclose = () => log('文字频道已断开');
+}
+
+function sendChat() {
+  const body = $('chatInput').value.trim();
+  if (!body || !ws || ws.readyState !== 1) return;
+  ws.send(JSON.stringify({ type: 'message', channelId: $('room').value.trim() || 'test', body }));
+  $('chatInput').value = '';
+}
+$('btnSend').onclick = sendChat;
+$('chatInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
+
+log('准备就绪。填好参数点"连接"。');
+log('提示：本页必须从 http://localhost 打开（不是 file://，也不是 https://）。');
+</script>
+</body>
+</html>
