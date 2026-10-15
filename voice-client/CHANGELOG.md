@@ -57,24 +57,28 @@
 - 护栏打印的排查提示直接指向"模板字符串里的反引号" ✓
   已证明会变红：种回反引号 → 精确报出那行、退出码 1 ✓
 
-### 换服务器（YOUR_SERVER_IP → YOUR_SERVER_IP）：纯配置变更，无代码改动
+### 那一轮还试过换到另一台服务器，最后**回退了**
 
-- `src/renderer/src/lib/config.ts`：内置默认地址 + 邀请码都改成新服务器的
-  （`ws://YOUR_SERVER_IP:7880` / `http://YOUR_SERVER_IP:3005` / 邀请码 `your-invite-code`）
-  ⚠️ 邀请码是服务器 `init.sh` **随机生成**的 ✗ 换服务器就要重跑 init.sh ✓
-  拿到新码之后填回这一行 ✓（不能沿用旧服务器的码 ✗ 后端会拒）
-- `package.json`：electron-updater 更新源改到 `http://YOUR_SERVER_IP:3005/updates`
-- `scripts/publish.ps1`：默认发布目标改到新服务器（SSH 22）
-- `README.md` / `measure-server-traffic.mjs` / `repair-config.mjs`：示例地址同步更新
-  （repair-config 现在新旧两台都认 ✓ 旧数据能修、新数据也能修 ✓）
+> 📌 记一笔是为了留个教训 ✗ 不是待办 ✓
 
-> ⚠️ 服务端配置同步改在 `voice-server` 侧：livekit.yaml（7881/7882/20Mbps 出口
-> → `bytes_per_sec: 2375000`）、.env.example、deploy.ps1、member.cmd、test-page、
-> p2p-check.html、README.md、init.sh 结尾提示。服务端版本号**不变**（1.9.0）✓
+试过把整套配置迁到一台普通 VPS（标准端口 7880/7881/7882、20 Mbps 出口）✓
+**最后决定回到原来的服务器** ✓ 所以配置、端口方案、邀请码都**原样保留** ✓
 
-> 📌 顺带修的部署坑：`scp -r voice-server` 会把 `backend/node_modules`
-> （3100+ 个文件）一个个传 ✗ 慢得像卡死，而且**传上去没用**（服务器自己会 npm install）✓
-> → 新增 `voice-server/pack.ps1` 打包成单个 0.15 MB 的 tar.gz ✓ `开始操作.md` 第 4 步已改 ✓
+回退时踩到的一个真坑，值得记下来：
+
+- ⚠️⚠️ **别拿公开仓库的旧提交当"回退基准"** ✗
+  我一开始想省事：`git show <旧提交>:文件` 取原文、把占位符换回真值就完事 ✓
+  结果 `package.json` 被还原成 **0.43.0**（工作区当时是 0.56.0 ✓）
+  因为那个公开仓库是**很久以前的快照** ✓ 不是"回退前的工作区" ✗
+  → 正确做法是**从"回退前"那个状态出发**（那份产物在公开仓库的**最新**提交里 ✓）
+  再对照自己的改动逐项反向 ✓
+  偷懒用旧快照的话，会把**中间几个版本的所有改动一起抹掉** ✗
+  而且这种事**看起来完全正常**（文件在、语法对、值也对 ✓）—— 只有版本号这种
+  "显式的、唯一的"值才会露馅 ✓ 其他静默丢失根本看不出来 ✗
+
+- 验证手段：`git diff <旧> <新> --numstat` 逐文件看差异行数 ✓
+  再和自己改动的大小**对不上就是要警惕** ✓
+  发现 `package.json` 是 3/3 ✓ 而我只改了 1 行（其余是版本号和 test 脚本的历史差异 ✓）
 
 ---
 

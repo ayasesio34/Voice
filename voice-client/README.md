@@ -455,7 +455,7 @@ $c = [System.IO.File]::ReadAllText($p, [System.Text.Encoding]::UTF8)
 ```
 客户端启动 8 秒后
     │
-    ├─ GET http://YOUR_SERVER_IP:3005/updates/latest.yml
+    ├─ GET http://YOUR_SERVER_IP:17706/updates/latest.yml
     │     清单里有：版本号、文件名、sha512
     │
     ├─ 版本号比本地新？

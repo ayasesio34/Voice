@@ -5,7 +5,7 @@
  *   node scripts/measure-server-traffic.mjs http://<你的服务器>:<端口> [秒数]
  *
  * 例：
- *   node scripts/measure-server-traffic.mjs http://1.2.3.4:3005 10
+ *   node scripts/measure-server-traffic.mjs http://1.2.3.4:17706 10
  *
  * ── 为什么要这个 ✗ ──────────────────────────────────────────
  *   `/api/net/summary` 返回的是**开机以来的累计字节数** ✓
@@ -40,7 +40,7 @@ const seconds = Number(process.argv[3] ?? 10)
 if (!url) {
   console.log('')
   console.log('  用法：node scripts/measure-server-traffic.mjs <服务器地址> [秒数]')
-  console.log('  例如：node scripts/measure-server-traffic.mjs http://1.2.3.4:3005 10')
+  console.log('  例如：node scripts/measure-server-traffic.mjs http://1.2.3.4:17706 10')
   console.log('')
   process.exit(1)
 }

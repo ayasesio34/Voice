@@ -53,7 +53,7 @@
     "publish": [
       {
         "provider": "generic",
-        "url": "http://YOUR_SERVER_IP:3005/updates"
+        "url": "http://YOUR_SERVER_IP:17706/updates"
       }
     ],
     "win": {

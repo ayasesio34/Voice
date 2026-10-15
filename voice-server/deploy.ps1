@@ -18,11 +18,11 @@
 $ErrorActionPreference = 'Stop'
 
 $Server  = 'root@YOUR_SERVER_IP'
-# ⚠️ 这台机器是**普通 VPS**（公网 IP 直通、端口自由）✓ SSH 走默认的 22 ✓
+# ⚠️ 这台机器是 NAT 型 VPS ✓ 服务商把 SSH 映射到了 17705 ✗ 不是 22 ✓
 #    所以 ssh 要 -p、scp 要 -P（大小写不一样 ✗ 这是经典坑 ✓）
-$Port    = 22
+$Port    = 17705
 $Remote  = '/opt/voice-server/backend/src'
-$Health  = 'http://YOUR_SERVER_IP:3005/health'
+$Health  = 'http://YOUR_SERVER_IP:17706/health'
 
 # 要发的文件 —— **自动列出 src 下所有 .js / .mjs**。
 #
@@ -35,7 +35,7 @@ $Health  = 'http://YOUR_SERVER_IP:3005/health'
 #    能生成就别手写。
 $Files = @(
   Get-ChildItem (Join-Path $PSScriptRoot 'backend\src') -File -ErrorAction SilentlyContinue |
-    Where-Object { $_.Extension -in '.js', '.mjs', '.html' } |
+    Where-Object { $_.Extension -in '.js', '.mjs' } |
     Select-Object -ExpandProperty Name
 )
 
