@@ -22,10 +22,12 @@ import {
   useVoiceRoom,
   type MicOptions,
 } from './hooks/useVoiceRoom'
+import { badgeFor, useScreenShareP2P } from './lib/screenShareP2P'
+import { useT } from './lib/i18n'
 import {
   deleteFile as apiDeleteFile,
   fetchMessages,
-  searchMessages,
+  fetchPinned,  searchMessages,
   fileUrl,
   openChat,
   uploadFile,
@@ -206,6 +208,18 @@ function loadShare(): ShareSettings {
 }
 
 export default function App() {
+  /**
+   * 界面文案 ✓
+   *
+   * ⚠️ 放在**整个组件最前面** ✗
+   *    App 里那些"渲染某一行的局部函数"（`renderMember` / `renderFile` 之类 ✓）
+   *    都写在下面 ✓ 它们会**闭包捕获**这个 `t` ✓
+   *    所以这里取一次就够 ✓ 里面全都能用 ✓ 不用一个个加 ✗
+   *
+   * ⚠️ 而且 hooks 不能有条件地调用 ✗ 必须在任何 return 之前 ✓
+   */
+  const t = useT()
+
   // ── 配置 ────────────────────────────────────────────────
   const [cfg, setCfg] = useState<AppConfig>(loadConfig)
   const [share, setShare] = useState<ShareSettings>(loadShare)
@@ -381,7 +395,7 @@ export default function App() {
       if (document.fullscreenElement) await document.exitFullscreen()
       else await el.requestFullscreen()
     } catch (err) {
-      setNotice({ text: `全屏失败：${(err as Error).message}`, kind: 'error' })
+      setNotice({ text: t('app.fullscreenFailed', { msg: (err as Error).message }), kind: 'error' })
     }
   }, [])
 
@@ -427,7 +441,7 @@ export default function App() {
   const [createChannelOpen, setCreateChannelOpen] = useState(false)
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false)
   /** 服务器名字和头像。全局共享，存在服务端 */
-  const [server, setServer] = useState<ServerInfo>({ name: '我的服务器', avatar: '' })
+  const [server, setServer] = useState<ServerInfo>({ name: t('app.defaultServerName'), avatar: '' })
 
   /**
    * 云端文件。聊天附件和"云端文件"共用同一张表、同一套上传接口 ——
@@ -623,7 +637,7 @@ export default function App() {
     const api = window.desktop
     if (!api?.onAlreadyRunning) return
     return api.onAlreadyRunning(() => {
-      setNotice({ text: 'Voice 已经在运行了，已经帮你切回这个窗口', kind: 'info' })
+      setNotice({ text: t('app.alreadyRunning'), kind: 'info' })
     })
   }, [])
 
@@ -722,6 +736,51 @@ export default function App() {
           setMessages((prev) => prev.filter((x) => x.id !== id))
           setSearchResults((prev) => (prev ? prev.filter((x) => x.id !== id) : prev))
         },
+        /**
+         * 投屏的 P2P 信令（SDP / ICE 候选 ✓）。
+         *
+         * ⚠️ 转给 ref 里的那个函数，不要直接闭包捕获 ✗
+         *    handlers 是一次性注册的 ✓ 而 handleSignal 的引用会变 ✓
+         *    闭包捕获会一直用第一版 —— 它手里的连接引用早就失效了 ✓
+         */
+        onP2P: (from, payload) => {
+          p2pSignalRef.current(from, payload)
+        },
+        /**
+         * 某条消息的 emoji 表态变了。
+         *
+         * ⚠️ 服务端给的是**全量**列表、不是增量 ✗
+         *    直接整批替换 ✓ **不要**自己算"加一个还是减一个" ——
+         *    两个人同时点的时候手工算很容易和库里对不上 ✓
+         *    而界面上的数字一旦错一次，就得等下次重新拉历史才修得回来 ✗
+         *
+         * ⚠️ 搜索结果里也可能有这条 ✓ 一起更新 ✓
+         *    不然"搜着搜着那条消息的表态就不动了" ✓ 很难发现 ✓
+         *   （消息 id 是全局唯一的 ✓ 所以不用管 channelId 对不对得上 ✓
+         *     带着它只是为了将来分片加载时方便 ✓）
+         */
+        onReactions: (_channelId, messageId, reactions) => {
+          const patch = (list: ChatMessage[]): ChatMessage[] =>
+            list.map((m) => (m.id === messageId ? { ...m, reactions } : m))
+          setMessages(patch)
+          setSearchResults((prev) => (prev ? patch(prev) : prev))
+        },
+        /**
+         * 某条消息的置顶状态变了。
+         *
+         * ⚠️ 广播里**只有 id 和时间**，没有整条消息 ✗
+         *    所以分两步：
+         *      ① 修补已加载的那条（如果在列表里的话 ✓）
+         *      ② 把 tick +1 ✓ 让**置顶面板**决定要不要重拉
+         *         （面板开着才响应 ✓ 关着就不折腾 ✓ 见 ChatPanel 里那个 effect）
+         */
+        onPinned: (_channelId, messageId, pinnedAt) => {
+          const patch = (list: ChatMessage[]): ChatMessage[] =>
+            list.map((m) => (m.id === messageId ? { ...m, pinned_at: pinnedAt } : m))
+          setMessages(patch)
+          setSearchResults((prev) => (prev ? patch(prev) : prev))
+          setPinnedTick((n) => n + 1)
+        },
         onPresence: setOnline,
         onVoice: setVoiceRooms,
         onChannels: setChannels,
@@ -754,7 +813,7 @@ export default function App() {
         // 被频道主移出服务器。这里没有自动重连，所以断开后不会自己回来 ——
         // 但用户重启应用还是会以新身份进来（身份被删了，服务端当新用户处理）。
         onRemoved: () =>
-          setNotice({ text: '你已被移出这个服务器', kind: 'error' }),
+          setNotice({ text: t('app.removedFromServer'), kind: 'error' }),
         // 别人上报了新游戏 —— 立刻让主进程用上新白名单
         onGames: (games) => {
           void window.desktop?.setSharedGames?.(games)
@@ -832,7 +891,7 @@ export default function App() {
         return
       }
       if (!chatRef.current?.openDm(userId)) {
-        notify(`还没连上服务端，暂时不能私聊 ${name}`)
+        notify(t('app.dmNotConnected', { name }))
       }
     },
     [dms, notify]
@@ -1109,6 +1168,44 @@ export default function App() {
    */
   const [searchResults, setSearchResults] = useState<ChatMessage[] | null>(null)
 
+  /**
+   * 正在回复的那条消息。`null` = 没在回复 ✓
+   *
+   * ⚠️ 换会话时必须清掉 ✗
+   *    在 A 频道点了「回复」✓ 然后切到 B 频道发消息 ✓
+   *    带过去的 replyTo 是 A 频道的消息 id ✓
+   *    服务端会判它跨频道、**静默忽略** ✓ 于是发出去的消息没有引用 ✗
+   *    用户只会觉得"我明明点了回复" ✓ 很难查 ✓
+   *    所以下面那个 effect 在会话一变就清 ✓
+   */
+  const [replyTo, setReplyTo] = useState<ChatMessage | null>(null)
+
+  useEffect(() => {
+    setReplyTo(null)
+    // 换会话时置顶列表也要清空 ✗
+    // 不清的话切过去会先看到**上一个频道**的置顶 ✓ 闪一下才被替换 ✓
+    setPinnedList([])
+  }, [activeChatId])
+
+  /**
+   * 置顶消息列表。**由 App 持有** ✓（ChatPanel 只管面板开没开 ✓）
+   * 因为服务端广播 `pinned` 的时候 App 这边也要能顺手刷新它 ✓
+   */
+  const [pinnedList, setPinnedList] = useState<ChatMessage[]>([])
+  /**
+   * 置顶状态变化的计数器 ✓ 每收到一次 `pinned` 广播就 +1 ✓
+   * ChatPanel 盯着它 ✓ 面板开着就重拉一遍 ✓（关着就什么都不做 ✓）
+   */
+  const [pinnedTick, setPinnedTick] = useState(0)
+
+  const loadPinned = useCallback(async () => {
+    if (!activeChatId) {
+      setPinnedList([])
+      return
+    }
+    setPinnedList(await fetchPinned(cfg, activeChatId))
+  }, [activeChatId, cfg])
+
   const doSearch = useCallback(
     async (opts: { q?: string; authorId?: string }) => {
       if (!activeChatId) return []
@@ -1199,12 +1296,12 @@ export default function App() {
      * 它以名字开头，所以停在名字上依然能看到全名。
      */
     const lines = [
-      `${m.name}${isMe ? '（我）' : ''}`,
-      `${ROLE_LABEL[m.role]} · ${isOnline ? '在线' : '离线'} · 右键更多`,
+      `${m.name}${isMe ? t('member.meSuffix') : ''}`,
+      `${ROLE_LABEL[m.role]} · ${isOnline ? t('member.online') : t('member.offline')} · ${t('member.rightClickMore')}`,
     ]
     if (activity) {
       lines.push(
-        `${activity.kind === 'game' ? '正在玩' : '正在听'}：${activity.title}${
+        `${(activity.kind === 'game' ? t('member.playing') : t('member.listening'))}：${activity.title}${
           activity.artist ? `\n${activity.artist}` : ''
         }`
       )
@@ -1233,7 +1330,7 @@ export default function App() {
           <span className="member-name">
             <span className="member-name-text">
               {m.name}
-              {isMe && <span className="muted"> （我）</span>}
+              {isMe && <span className="muted">{t('member.meSuffix')}</span>}
             </span>
             {m.role !== 'member' && (
               <span className={`role-badge role-badge-${m.role}`}>{ROLE_LABEL[m.role]}</span>
@@ -1245,18 +1342,18 @@ export default function App() {
               className="member-activity"
               /* 歌名/游戏名和歌手分两行 —— 名字二三十个字时，
                  一行会横到屏幕外面去 */
-              title={`${activity.kind === 'game' ? '正在玩' : '正在听'}：${activity.title}${
+              title={`${(activity.kind === 'game' ? t('member.playing') : t('member.listening'))}：${activity.title}${
                 activity.artist ? `\n${activity.artist}` : ''
               }`}
             >
-              {activity.kind === 'game' ? '正在玩' : '正在听'}：{activity.title}
+              {(activity.kind === 'game' ? t('member.playing') : t('member.listening'))}：{activity.title}
             </span>
           )}
         </span>
 
         {inVoice && (
-          <span className="member-icon" title="正在语音频道里">
-            🔊
+          <span className="member-icon" title={t('member.inVoice')}>
+            <SpeakerIcon size={13} />
           </span>
         )}
 
@@ -1333,6 +1430,95 @@ export default function App() {
   /** 我在语音频道里吗。投屏的整套界面都以此为前提 ——
    *  人都不在频道里，别人的画面跟你没有任何关系 */
   const inVoice = Boolean(voiceJoinedRoomId)
+
+  // ── 投屏的 P2P ────────────────────────────────────────────
+  //
+  // ★ 这里**没有**回退逻辑，这是刻意的 ✗
+  //   分享端照旧发布到 LiveKit ✓ 另外再开一条 P2P ✓
+  //   观看端拿到 P2P 流就渲染它 ✓ 于是 LiveKit 那个 <video> 被卸载 ✓
+  //   → adaptiveStream 发现没人看了 → **自动停掉订阅** ✓ 服务器出口归零 ✓✓
+  //   P2P 打不通就什么都不做 ✓ 照旧渲染 LiveKit ✓ **回退就是默认行为** ✓✓
+  //   不需要超时判断、不需要中途取消发布 ✓（见 lib/screenShareP2P.ts 的说明）
+
+  /**
+   * 我正在共享的那条流（**原始 MediaStream** ✓ 不是 LiveKit 的轨道对象 ✓）
+   *
+   * ⚠️ 从 LiveKit 的发布里反推出来，而不是让 useVoiceRoom 额外暴露一个 ✗
+   *    同一条 mediaStreamTrack 既能给 LiveKit ✓ 也能给 RTCPeerConnection ✓
+   *    所以不需要动采集那边一行代码 ✓ 风险最小 ✓
+   *
+   * ⚠️⚠️ 这里踩过一个**很贵的坑** ✗ 直接导致 P2P 在真机上完全不工作 ✓
+   *
+   *   原来的写法是：
+   *     useMemo(() => { ... return new MediaStream([t]) }, [screenShares])
+   *                                          ↑ 每次重算都造一个**新对象** ✗
+   *                    而 screenShares 是**每次 LiveKit 推送都变的新数组** ✗✗
+   *
+   *   → LiveKit 每隔几秒推一次 ✓ → memo 重算 → 新的 MediaStream ✓
+   *   → useScreenShareP2P 里那个 effect 的依赖是 myStream ✓ 它变了 ✓
+   *   → effect 重跑：**先把 broadcaster stop() 掉**（里面 pc.close() ✓）
+   *     再新建一个 ✓ → 刚建好的直连每几秒被拆一次 ✗✗
+   *   → 表现：徽章**先闪一下「直连」再变成「经服务器」** ✓
+   *     而服务器上多出整整一个码率的流量（画面一直在走 LiveKit ✓）
+   *
+   *   修法：**只依赖那条轨道本身** ✗ 不要依赖"盛放它的数组" ✓
+   *   轨道是稳定的对象 ✓ 只有真的换了共享源时才会变 ✓✓
+   */
+  const myShareTrack = screenShares.find((s) => s.isLocal)?.track.mediaStreamTrack ?? null
+  const myShareStream = useMemo(
+    () => (myShareTrack ? new MediaStream([myShareTrack]) : null),
+    [myShareTrack],
+  )
+
+  const shareP2P = useScreenShareP2P({
+    myUserId: cfg.userId,
+    inVoice,
+    sendP2P: (to, payload) => Boolean(chatRef.current?.p2p(to, payload)),
+    myStream: myShareStream,
+    // ⚠️ 看自己的画面**不需要** P2P ✗（本地直接就有了 ✓）
+    //    给个 null 让 hook 把观看端拆掉 ✓
+    watchTarget: watchingShare && !watchingShare.isLocal ? watchingShare.key : null,
+  })
+
+  /**
+   * ⚠️ 信令路由必须走 ref ✗
+   *    `onP2P` 是在 openChat 的 handlers 里注册的 ✓ 那是一次性的 ✓
+   *    而 handleSignal 是 useCallback 出来的 ✓ 引用会变 ✓
+   *    直接闭包捕获的话会一直用**第一版**的函数 ✓
+   *    （那个版本手里的 broadcaster / receiver 引用早就失效了 ✗）
+   */
+  const p2pSignalRef = useRef(shareP2P.handleSignal)
+  p2pSignalRef.current = shareP2P.handleSignal
+
+  /** 正在看的那一路有没有 P2P 画面 ✓ 有就用它 ✓ */
+  const watchingP2PStream = watchingShare ? shareP2P.streams[watchingShare.key] : undefined
+
+  /**
+   * 投屏传输方式的徽章 ✓
+   *
+   * ⚠️ 这个必须让用户看得见 ✗
+   *    走直连和走服务器，延迟和画质可能不一样 ✓
+   *    出问题时他得知道该怪谁 ✓
+   *    而且这也是**唯一**能确认 P2P 真的生效了的办法 ✓
+   *    （不然你只能靠"服务器流量好像少了"去猜 ✗）
+   */
+  const shareBadge =
+    !inVoice || screenShares.length === 0
+      ? null
+      : (() => {
+          /**
+           * ⚠️⚠️ 徽章**只要画面上有投屏就必须在** ✗
+           *
+           *   以前这里是三层三元 ✓ 而 `idle` 落到最后一档 → `null` → **徽章消失** ✓
+           *   而"一条 P2P 连接都没有"的那一刻正好就是 `idle` ✓
+           *   → 用户看到徽章闪一下就没了 ✓（真发生过 ✓）
+           *
+           *   现在：**存在与否**只由上面那个条件决定 ✓（在语音里 + 有投屏 ✓）
+           *         **写什么**由 badgeFor 决定 ✓ 它对 idle 也给说法 ✓
+           */
+          const b = badgeFor(shareP2P.status)
+          return { text: t(b.textKey), cls: b.cls, tip: t(b.tipKey) }
+        })()
 
   /**
    * 共享结束、或我离开了频道 → 自动退出观看。
@@ -1455,7 +1641,7 @@ export default function App() {
       const uploaded = await uploadFile(cfg, file, 'cloud')
       mergeFile(uploaded)
       setNotice({
-        text: `已上传 ${uploaded.name}`,
+        text: t('files.uploaded', { name: uploaded.name }),
         kind: 'info',
       })
     },
@@ -1466,7 +1652,7 @@ export default function App() {
     async (file: CloudFile) => {
       await apiDeleteFile(cfg, file.id)
       setFiles((prev) => prev.filter((f) => f.id !== file.id))
-      setNotice({ text: `已删除 ${file.name}`, kind: 'info' })
+      setNotice({ text: t('files.deleted', { name: file.name }), kind: 'info' })
     },
     [cfg]
   )
@@ -1615,21 +1801,23 @@ export default function App() {
           {/* 连接过程一定要有可见反馈。否则用户以为没点上、再点一次，
               而两次点击会各自建立一条连接 —— 成员列表里就出现两个自己。 */}
           {voice.status === 'connecting' ? (
-            <>正在连接…</>
+            <>{t('voice.connecting')}</>
           ) : voice.status === 'reconnecting' ? (
-            <>重连中…</>
+            <>{t('voice.reconnecting')}</>
           ) : voiceChannel ? (
-            <>🔊 {voiceChannel.name}</>
+            <>
+              <SpeakerIcon size={13} /> {voiceChannel.name}
+            </>
           ) : voice.status === 'connected' ? (
-            <>已连接语音</>
+            <>{t('voice.connected')}</>
           ) : (
-            <>未加入语音频道</>
+            <>{t('voice.notInChannel')}</>
           )}
           {voice.room && (
             <>
               {' · '}
-              {participants.length} 人 · {AUDIO_SPEC}
-              {voice.deafened ? ' · 已关喇叭' : ''}
+              {t('voice.peopleCount', { n: participants.length })} · {AUDIO_SPEC}
+              {voice.deafened ? t('voice.deafenedSuffix') : ''}
             </>
           )}
         </span>
@@ -1645,7 +1833,7 @@ export default function App() {
           disabled={!voice.room || voice.deafened}
           onClick={toggleMicWithSound}
           title={
-            voice.deafened ? '关闭喇叭时无法单独开麦' : micOn ? '闭麦（开麦中）' : '开麦（已闭麦）'
+            voice.deafened ? t('voice.micDeafened') : micOn ? t('voice.micOn') : t('voice.micOff')
           }
         >
           <MicIcon off={!micOn} />
@@ -1657,7 +1845,7 @@ export default function App() {
           className={`voice-btn icon ${voice.deafened ? 'off' : 'on'}`}
           disabled={!voice.room}
           onClick={toggleDeafenWithSound}
-          title={voice.deafened ? '恢复收听（当前已静音）' : '静音 —— 关掉所有别人的声音（会同时闭麦）'}
+          title={voice.deafened ? t('voice.unmuteTitle') : t('voice.muteTitle')}
         >
           <SpeakerIcon off={voice.deafened} />
         </button>
@@ -1669,7 +1857,7 @@ export default function App() {
           className="voice-btn icon danger-fill"
           disabled={!voice.room}
           onClick={() => void voice.disconnect()}
-          title="退出语音频道"
+          title={t('voice.leaveTitle')}
         >
           <PhoneOffIcon />
         </button>
@@ -1680,26 +1868,26 @@ export default function App() {
           <button
             className="voice-btn danger"
             onClick={() => void voice.stopScreen()}
-            title="停止共享屏幕"
+            title={t('voice.stopShareTitle')}
           >
             <ScreenIcon />
-            停止
+            {t('voice.stop')}
           </button>
         ) : (
           <button
             className="voice-btn"
             disabled={!voice.room}
             onClick={() => setPickerOpen(true)}
-            title="共享屏幕"
+            title={t('voice.shareTitle')}
           >
             <ScreenIcon />
-            投屏
+            {t('voice.share')}
           </button>
         )}
 
-        <button className="voice-btn" onClick={() => setSettingsOpen(true)} title="设置">
+        <button className="voice-btn" onClick={() => setSettingsOpen(true)} title={t('voice.settings')}>
           <GearIcon />
-          设置
+          {t('voice.settings')}
         </button>
       </div>
     </div>
@@ -1740,7 +1928,18 @@ export default function App() {
           onCreateChannel={() => setCreateChannelOpen(true)}
           onOpenServerSettings={() => setServerSettingsOpen(true)}
           onDeleteChannel={(id) => {
-            if (window.confirm('删除这个频道？频道里的聊天记录会一起删掉，无法恢复。')) {
+            // ⚠️ 有子频道时必须**明确写出会连坐几个** ✗
+            //    只写"聊天记录会一起删掉"是不够的 ✓
+            //    用户根本想不到还捎带删了几个频道 ✓ 那是最容易丢东西的方式 ✓
+            const kids = channels.filter((c) => c.parent_id === id)
+            const extra =
+              kids.length > 0
+                ? t('channel.deleteChildren', {
+                    n: kids.length,
+                    names: kids.map((k) => k.name).join('、'),
+                  })
+                : ''
+            if (window.confirm(t('channel.deleteConfirm') + extra)) {
               chatRef.current?.deleteChannel(id)
             }
           }}
@@ -1752,7 +1951,7 @@ export default function App() {
           名字长了侧栏就不够用（成员列表里全是省略号），所以两边都能拖 */}
       <div
         className={`col-resizer ${dragging === 'left' ? 'active' : ''}`}
-        title="拖动调整左侧宽度"
+        title={t('app.resizeLeft')}
         onMouseDown={(e) => {
           e.preventDefault()
           setDragging('left')
@@ -1792,10 +1991,10 @@ export default function App() {
             <span className="stage-invite-icon">🖥</span>
             <span className="stage-invite-text">
               <strong>{inviteShare.name}</strong>
-              {inviteShare.isLocal ? '（我）' : ''} 正在共享屏幕
-              {screenShares.length > 1 ? `（共 ${screenShares.length} 路）` : ''}
+              {inviteShare.isLocal ? t('member.meSuffix') : ''} {t('stage.sharingLabel')}
+              {screenShares.length > 1 ? t('stage.shareCount', { n: screenShares.length }) : ''}
             </span>
-            <span className="stage-invite-cta">点击观看</span>
+            <span className="stage-invite-cta">{t('stage.clickToWatch')}</span>
           </button>
         )}
 
@@ -1823,10 +2022,10 @@ export default function App() {
                         key={s.sid}
                         className={`stage-tab ${s.sid === watchingShare.sid ? 'active' : ''}`}
                         onClick={() => setWatchingSid(s.sid)}
-                        title={s.name + (s.isLocal ? '（我）' : '')}
+                        title={s.name + (s.isLocal ? t('member.meSuffix') : '')}
                       >
                         {s.name}
-                        {s.isLocal ? '（我）' : ''}
+                        {s.isLocal ? t('member.meSuffix') : ''}
                       </button>
                     ))}
                   </div>
@@ -1835,8 +2034,14 @@ export default function App() {
                 )}
 
                 <span className="muted small">
-                  正在共享{screenShares.length > 1 ? ` · 共 ${screenShares.length} 路` : ''}
+                  {t('stage.sharingLabel')}{screenShares.length > 1 ? ' ·' + t('stage.shareCount', { n: screenShares.length }) : ''}
                 </span>
+
+                {shareBadge && (
+                  <span className={`p2p-badge p2p-${shareBadge.cls}`} title={shareBadge.tip}>
+                    {shareBadge.text}
+                  </span>
+                )}
 
                 {/* 谁在看这一路 —— 已经挪到画面左下角的叠头像上了
                     （见下面 .stage-video 里那块）。这里不再重复显示。 */}
@@ -1850,8 +2055,8 @@ export default function App() {
                     （画面占满屏幕 ✓ 别人外放的杂音最烦 ✓）
                     它归控制条管 ✓ 鼠标移开时跟着一起藏 ✓ 不会一直杵在画面上 ✓ */}
                 {screenAudio.length > 0 && (
-                  <span className="stage-volume" title="共享声音的音量">
-                    {screenVolume === 0 ? '🔇' : '🔊'}
+                  <span className="stage-volume" title={t('stage.screenVolume')}>
+                    {screenVolume === 0 ? <SpeakerIcon size={16} off /> : <SpeakerIcon size={16} />}
                     <input
                       type="range"
                       min={0}
@@ -1869,9 +2074,9 @@ export default function App() {
                 <button
                   className="ghost small-btn"
                   onClick={() => void toggleFullscreen()}
-                  title={isFullscreen ? '退出全屏（也可以按 Esc）' : '全屏观看'}
+                  title={isFullscreen ? t('stage.exitFullscreenTitle') : t('stage.enterFullscreenTitle')}
                 >
-                  {isFullscreen ? '退出全屏' : '⛶ 全屏'}
+                  {isFullscreen ? t('stage.exitFullscreen') : t('stage.enterFullscreen')}
                 </button>
 
                 {!isFullscreen && (
@@ -1879,9 +2084,9 @@ export default function App() {
                     <button
                       className="ghost small-btn"
                       onClick={() => setStageCollapsed(true)}
-                      title="画面收起来，聊天区变大（还在接收画面）"
+                      title={t('stage.collapseTitle')}
                     >
-                      收起
+                      {t('stage.collapse')}
                     </button>
                     {/* 不看了。和「收起」的区别：收起只是藏起来，这个**断开画面接收**，
                         分享者那边也会跟着停发（省流量）。 */}
@@ -1891,15 +2096,26 @@ export default function App() {
                         setWatching(false)
                         setStageCollapsed(false)
                       }}
-                      title="不看这个投屏了 —— 同时停止接收画面，省流量"
+                      title={t('stage.quitTitle')}
                     >
-                      退出投屏
+                      {t('stage.quit')}
                     </button>
                   </>
                 )}
               </div>
               <div className="stage-video">
-                <VideoTile track={watchingShare.track} muted className="stage-player" />
+                {/* ★ 有 P2P 流就渲染它 ✗
+                    ⚠️ 这里**没有** if/else 式的回退逻辑 ✓
+                       两个分支是"有就用、没有就不用" ✓
+                       P2P 一失败，下面那个分支自然就生效了 ✓
+                    而渲染 P2P 的这一刻，LiveKit 那个 <VideoTile> **被卸载** ✓
+                       → 轨道 detach → adaptiveStream 停掉订阅 → 服务器出口归零 ✓✓
+                       —— 这一段是白拿的收益 ✓ 一行代码都不用为它写 ✓ */}
+                {watchingP2PStream ? (
+                  <StreamTile stream={watchingP2PStream} className="stage-player" />
+                ) : (
+                  <VideoTile track={watchingShare.track} muted className="stage-player" />
+                )}
 
                 {/* 谁在看 —— 叠在画面**左下角**。
                     放这儿而不是标题栏：看投屏时视线本来就在画面上，
@@ -1908,7 +2124,7 @@ export default function App() {
                 {viewers.total > 0 && (
                   <div
                     className="viewer-stack"
-                    title={`正在观看：${viewers.allNames.join('、')}`}
+                    title={t('stage.viewersTitle', { names: viewers.allNames.join('、') })}
                   >
                     {viewers.shown.map((v) => (
                       <span className="viewer-avatar" key={v.key}>
@@ -1930,7 +2146,7 @@ export default function App() {
                 e.preventDefault()
                 draggingRef.current = true
               }}
-              title="拖动调整画面大小"
+              title={t('stage.resize')}
             />
           </>
         )}
@@ -1941,9 +2157,9 @@ export default function App() {
         {watchingShare && stageCollapsed && (
           <div className="stage-mini">
             <button className="stage-mini-open" onClick={() => setStageCollapsed(false)}>
-              🖥 {screenName} 正在共享屏幕
-              {screenShares.length > 1 ? `（还有 ${screenShares.length - 1} 路）` : ''} ·
-              点击展开
+              🖥 {screenName} {t('stage.sharingLabel')}
+              {screenShares.length > 1 ? t('stage.moreCount', { n: screenShares.length - 1 }) : ''} ·
+              {t('stage.clickToExpand')}
             </button>
             <button
               className="small-btn stage-exit"
@@ -1951,9 +2167,9 @@ export default function App() {
                 setWatching(false)
                 setStageCollapsed(false)
               }}
-              title="不看这个投屏了 —— 同时停止接收画面，省流量"
+              title={t('stage.quitTitle')}
             >
-              退出投屏
+              {t('stage.quit')}
             </button>
           </div>
         )}
@@ -1968,9 +2184,29 @@ export default function App() {
           messages={visibleMessages}
           connected={chatReady}
           fileHref={(id) => fileUrl(cfg, id)}
-          onSend={(body, attachment) => {
-            if (activeChatId) chatRef.current?.send(activeChatId, body, attachment)
+          onSend={(body, attachment, replyToId) => {
+            if (activeChatId) chatRef.current?.send(activeChatId, body, attachment, replyToId)
           }}
+          /* 回复态。传 null 就是没在回复 ✓
+             ⚠️ 换会话时必须清掉 ✗ 见下面那个 effect ——
+                不清的话在 A 频道点了回复 ✓ 切到 B 频道发出去的也会引用 A 的消息 ✓
+                而服务端会因为这个跨频道引用判它无效 ✓ 于是那条消息**悄悄没有引用** ✗
+                用户只会觉得"我明明点了回复" ✓ 很难查 ✓ */
+          replyTo={replyTo}
+          onReply={setReplyTo}
+          onCancelReply={() => setReplyTo(null)}
+          /* 表态。只给"连上了"的时候传入口 ✓
+             没连上时服务端也收不到 ✓ 不如干脆不显示 ✓ */
+          myUserId={cfg.userId}
+          onReact={
+            chatReady ? (id, emoji) => void chatRef.current?.react(id, emoji) : undefined
+          }
+          /* 置顶。列表由 App 持有 ✓ 面板开没开由 ChatPanel 管 ✓
+             两边靠 pinnedTick 这个计数器联动 ✓ 见 onPinned */
+          onPin={chatReady ? (id) => void chatRef.current?.pin(id) : undefined}
+          pinned={pinnedList}
+          pinnedTick={pinnedTick}
+          onLoadPinned={() => void loadPinned()}
           onUpload={uploadForChat}
           onOpenFile={openFile}
           onSearch={doSearch}
@@ -2000,7 +2236,7 @@ export default function App() {
       {/* 右把手 */}
       <div
         className={`col-resizer ${dragging === 'right' ? 'active' : ''}`}
-        title="拖动调整右侧宽度"
+        title={t('app.resizeRight')}
         onMouseDown={(e) => {
           e.preventDefault()
           setDragging('right')
@@ -2010,7 +2246,7 @@ export default function App() {
       {/* 成员列表 */}
       <aside className="member-list">
         <div className="member-group-title">
-          成员 · {onlineMembers.length} 在线 / {members.length} 总计
+          {t('members.header', { online: onlineMembers.length, total: members.length })}
         </div>
 
         {onlineMembers.map((m) => renderMember(m, true))}
@@ -2021,7 +2257,7 @@ export default function App() {
         {offlineMembers.length > 0 && (
           <>
             <div className="member-divider" />
-            <div className="member-offline-title">离线 — {offlineMembers.length}</div>
+            <div className="member-offline-title">{t('members.offlineHeader', { n: offlineMembers.length })}</div>
           </>
         )}
 
@@ -2029,7 +2265,7 @@ export default function App() {
 
         {members.length === 0 && (
           <div className="muted small" style={{ padding: '4px 14px' }}>
-            还没有成员
+            {t('members.empty')}
           </div>
         )}
       </aside>
@@ -2090,8 +2326,12 @@ export default function App() {
       <ChannelCreateDialog
         open={createChannelOpen}
         onCancel={() => setCreateChannelOpen(false)}
-        onCreate={(name, kind) => {
-          chatRef.current?.createChannel(name, kind)
+        /* ⚠️ 只传**顶层**频道当候选 ✗
+              子频道不能再当父（服务端拦 nest_too_deep ✓）
+              列出来只会让人选到会失败的东西 ✓ */
+        parents={channels.filter((c) => !c.parent_id)}
+        onCreate={(name, kind, parentId) => {
+          chatRef.current?.createChannel(name, kind, parentId)
           setCreateChannelOpen(false)
         }}
       />
@@ -2114,7 +2354,7 @@ export default function App() {
           <div className="context-menu-title">{memberMenu.name}</div>
 
           {memberMenu.isMe ? (
-            <div className="context-menu-note">这是你自己</div>
+            <div className="context-menu-note">{t('members.thisIsYou')}</div>
           ) : (
             <>
               <button
@@ -2125,7 +2365,7 @@ export default function App() {
                   openDmWith(userId, name)
                 }}
               >
-                私聊
+                {t('members.dm')}
               </button>
 
               {/* 升管 / 撤管。只有频道主能动别人，而且动不了其他频道主。
@@ -2140,7 +2380,7 @@ export default function App() {
                     chatRef.current?.setRole(userId, role === 'admin' ? 'member' : 'admin')
                   }}
                 >
-                  {memberMenu.role === 'admin' ? '取消管理员' : '设为管理员'}
+                  {memberMenu.role === 'admin' ? t('members.revokeAdmin') : t('members.makeAdmin')}
                 </button>
               )}
 
@@ -2154,21 +2394,13 @@ export default function App() {
                   onClick={() => {
                     const { userId, name } = memberMenu
                     setMemberMenu(null)
-                    if (
-                      !window.confirm(
-                        `把「${name}」移出服务器？\n\n` +
-                          '他会立刻断开，成员记录被删除。\n' +
-                          '他发过的消息会保留（聊天记录不会出现空洞）。\n\n' +
-                          '注意这是踢出，不是封禁 —— 他清掉本地配置重新打开，\n' +
-                          '会以一个新身份再进来。'
-                      )
-                    ) {
+                    if (!window.confirm(t('members.removeConfirm', { name }))) {
                       return
                     }
                     chatRef.current?.removeMember(userId)
                   }}
                 >
-                  移除成员
+                  {t('members.remove')}
                 </button>
               )}
             </>
@@ -2261,4 +2493,35 @@ export default function App() {
       />
     </div>
   )
+}
+
+
+/**
+ * 放一个**浏览器原生 MediaStream** 的 <video>。
+ *
+ * ⚠️ 不能复用 `VideoTile` ✗
+ *    那个收的是 LiveKit 的 `Track` 对象 ✓ 内部要 attach/detach ✓
+ *    而 P2P 拿到的是原生的 `MediaStream` ✓ 直接 `srcObject` 就行 ✓
+ *    没有 attach 那一步 ✓ 混在一起只会让两边都变复杂 ✓
+ *
+ * ⚠️ 卸载时要把 `srcObject` 置空 ✗
+ *    不清的话那个 <video> 会一直握着这条流 ✓ 里面的轨道不会结束 ✓
+ *    反复切换看谁的时候会越积越多 ✓
+ *    （和解绑 LiveKit 轨道是同一个道理 ✓）
+ */
+function StreamTile({ stream, className }: { stream: MediaStream; className?: string }) {
+  const ref = useRef<HTMLVideoElement>(null)
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.srcObject = stream
+    // ⚠️ 有些浏览器（以及自动播放策略）下要显式 play 一次 ✗
+    void el.play().catch(() => {})
+    return () => {
+      el.srcObject = null
+    }
+  }, [stream])
+
+  return <video ref={ref} className={className} autoPlay playsInline muted />
 }

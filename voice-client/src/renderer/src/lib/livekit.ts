@@ -1,4 +1,4 @@
-﻿import {
+import {
   AudioPresets,
   Room,
   Track,
@@ -24,16 +24,49 @@ import { stopScreenAudio } from './screenAudio'
 // ─────────────────────────────────────────────────────────────
 
 /**
- * 麦克风：48 kbps 单声道。
+ * 麦克风：**96 kbps 单声道**。
  *
- * 24 kbps（speech 档）对说话已经接近透明，48 kbps 是"宁可多花点流量、
- * 也不想在多人抢话或背景有声音时发闷"的选择。3 人频道、1 人说话 1 小时，
- * 服务端出口从约 21.6 MB 涨到约 43.2 MB（含 DTX，实际更低）。
+ * ⚠️ 把这笔账写清楚，免得以后有人以为是免费的 ✗
+ *    Opus 单声道对"人说话"在 32 kbps 就已经透明 ✓
+ *    所以 48 → 96 kbps 在多数情况下**听不出差别** ✓
+ *    但这是明确选择要留余量 ✓ 那就把代价写在这儿 ✓
+ *
+ * SFU 是"收 1 份、发 N-1 份" ✓ 5 个人的服务端出口：
+ *
+ *     48 kbps（music）              5 × 4 × 48k  = 0.96 Mbps
+ *     96 kbps（musicHighQuality）   5 × 4 × 96k  = 1.92 Mbps   ← 当前
+ *     128 kbps（musicHighQualityStereo）5 × 4 × 128k = 2.56 Mbps
+ *
+ * 开了 DTX 之后静音期间不发包 ✓ 实际平均比上面低 40~60% ✓
+ * 而且**投屏改走 P2P 之后服务器出口基本只剩语音** ✓ 1.92 Mbps 完全放得下 ✓
+ * （⚠️ 那个改造完成之前别动这一档 ✗ 那时服务器还要扛投屏 ✓ 加起来就超 6 Mbps 了）
+ *
+ * ★ 为什么是 96 而不是 128 ✗
+ *   128 那一档（musicHighQualityStereo）是**给立体声源准备的** ✓
+ *   麦克风是**单声道** ✓ 用它会白白多花 33% 的带宽 ✓ 而听感没有区别 ✓
+ *   96 kbps 单声道已经**远超**人声透明所需的码率 ✓
+ *
+ * ⚠️ 语音"听起来不对"的时候，第一个该怀疑的**不是码率** ✗
+ *     ① AGC（自动增益）—— 大声时被压出 artifact ✓ 最像"大声就卡/发闷"
+ *     ② 降噪 —— 处理过头会让人声发闷、带金属感
+ *     ③ 回声消除 —— 外放时最容易出问题
+ *    这三项在设置面板里都能单独关 ✓ **先让出问题的人关掉 AGC 试试** ✓
  */
-export const MIC_AUDIO_PRESET = AudioPresets.music
+export const MIC_AUDIO_PRESET = AudioPresets.musicHighQuality
 
-/** 共享的系统声音：游戏声/视频声，立体声。码率低了会明显发闷 */
-export const SCREEN_AUDIO_PRESET = AudioPresets.musicStereo
+/**
+ * 共享的系统声音：游戏声 / 视频声 / 音乐，**立体声 128 kbps**。
+ *
+ * ⚠️ 这一档和麦克风不一样 ✗ —— 音乐是**真的吃码率** ✓
+ *    原来用的是 musicStereo（64 kbps 立体声）✓
+ *    立体声要摊到两个声道 ✓ 等于**每个声道只有 32 kbps** ✗
+ *    放音乐时会明显发闷、镲片糊成一片 ✓
+ *    提到 128 kbps 立体声（每声道 64 kbps）是**真能听出区别的** ✓✓
+ *
+ * 代价很小 ✓ 因为它**只在"投屏 + 勾了分享声音"时才有这一路** ✓
+ * 单路 128 kbps ✓ 对 6 Mbps 的服务器可以忽略 ✓
+ */
+export const SCREEN_AUDIO_PRESET = AudioPresets.musicHighQualityStereo
 
 // ─────────────────────────────────────────────────────────────
 // 画质档位

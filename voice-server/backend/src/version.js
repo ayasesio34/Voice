@@ -27,4 +27,4 @@
  *   两边都改了        → 两边都改
  */
 
-export const SERVER_VERSION = '1.4.1';
+export const SERVER_VERSION = '1.9.0';

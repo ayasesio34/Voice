@@ -9,11 +9,22 @@ import {
   type VoiceRooms,
 } from '../lib/names'
 import { Avatar } from './Avatar'
+import { FolderIcon, HashIcon, SpeakerIcon } from './icons'
+import { useT } from '../lib/i18n'
 
 export type Channel = {
   id: string
   name: string
   kind: 'text' | 'voice'
+  /**
+   * 父频道 id。`null` / `undefined` = 顶层 ✓
+   *
+   * ⚠️ 这里和 `lib/api.ts` 的 `ChannelInfo` 是**两个**类型 ✗
+   *    （那个是线路格式，这个是界面用的 ✓ 历史上分开的 ✓）
+   *    加字段时**两边都要加** ✓
+   *    漏一边 typecheck 会直接报出来 ✓ —— 这次就是它抓到的 ✓
+   */
+  parent_id?: string | null
 }
 
 export type ServerHeaderInfo = {
@@ -91,8 +102,37 @@ export function ChannelList({
   volumes,
   onSetVolume,
 }: Props) {
-  const text = channels.filter((c) => c.kind === 'text')
-  const voice = channels.filter((c) => c.kind === 'voice')
+  /** 界面文案 ✓ 语言一变，这个组件自动重渲染 ✓ 不用手动刷新 ✓ */
+  const t = useT()
+
+  // ⚠️ 只把**顶层**频道分到两个组里 ✗
+  //    子频道要挂到各自的父频道下面去 ✓
+  //    直接 `filter(kind === 'text')` 的话子频道会**同时**出现在组里和父下面 ✓
+  //    同一个频道显示两遍 ✓
+  const tops = channels.filter((c) => !c.parent_id)
+  const text = tops.filter((c) => c.kind === 'text')
+  const voice = tops.filter((c) => c.kind === 'voice')
+
+  /**
+   * 某个顶层频道下面挂着的子频道 ✓
+   *
+   * ⚠️ 只会有一层 ✗（服务端拦着 `nest_too_deep` ✓）
+   *    所以这里不用递归 ✓ 直接按 parent_id 找一层就够 ✓
+   */
+  const kidsOf = (id: string) => channels.filter((c) => c.parent_id === id)
+
+  /** 一个父频道 + 它的子频道，铺平成一行行 ✓（父子共用同一套渲染 ✓） */
+  const withKids = (list: typeof channels) => list.flatMap((c) => [c, ...kidsOf(c.id)])
+
+  /**
+   * 这个频道**是不是只是个分组**（有子频道 ✓）
+   *
+   * ⚠️ 有子频道之后它就**不能再进去**了 ✗ 它变成了一个标题 ✓
+   *    用户明确要求的就是这个："主频道有子频道后就只能进子频道" ✓
+   *    语音那边更明显 —— 点父频道会真的加入那个 LiveKit 房间 ✓
+   *    而子频道是**另一个房间** ✓ 两个都能进只会让人分不清 ✓
+   */
+  const isGroup = (c: Channel) => kidsOf(c.id).length > 0
 
   /**
    * 右键菜单。
@@ -171,7 +211,7 @@ export function ChannelList({
         onClick={onOpenServerSettings}
         disabled={!canManage}
         title={
-          canManage ? `${server.name} · 点击打开服务器设置` : server.name
+          canManage ? t('channel.openServerSettings', { name: server.name }) : server.name
         }
       >
         <Avatar raw={server.avatar} name={server.name} size={34} />
@@ -181,7 +221,7 @@ export function ChannelList({
           {/* 连接状态左对齐贴在名字下面 */}
           <span className={`server-header-status ${connected ? 'on' : 'off'}`}>
             <span className={`dot ${connected ? 'on' : 'off'}`} />
-            {connected ? `已连接 · ${onlineCount} 人在线` : '未连接'}
+            {connected ? t('channel.connected', { n: onlineCount }) : t('channel.disconnected')}
           </span>
         </span>
 
@@ -190,23 +230,42 @@ export function ChannelList({
 
       {/* 云端文件。放在频道列表最上面 —— 它不属于任何频道，
           而是全服务器共用的一个"文件柜" */}
-      <button className="cloud-entry" onClick={onOpenFiles} title="上传文件、下载别人传的文件">
-        <span className="cloud-entry-icon">📁</span>
-        <span className="cloud-entry-name">云端文件</span>
+      <button className="cloud-entry" onClick={onOpenFiles} title={t('channel.cloudFilesTip')}>
+        <span className="cloud-entry-icon">
+          <FolderIcon size={16} />
+        </span>
+        <span className="cloud-entry-name">{t('channel.cloudFiles')}</span>
         {fileCount > 0 && <span className="cloud-entry-count">{fileCount}</span>}
       </button>
 
       {text.length > 0 && (
         <>
-          <div className="channel-group-title">文字频道</div>
-          {text.map((c) => (
-            <div key={c.id} className="channel-row" onContextMenu={(e) => openMenu(e, c)}>
+          <div className="channel-group-title">{t('channel.textGroup')}</div>
+          {withKids(text).map((c) => (
+            <div
+              key={c.id}
+              /* 子频道靠这个类缩进 ✓ 只加缩进、不加别的 ✗ */
+              className={`channel-row${c.parent_id ? ' channel-row-child' : ''}`}
+              onContextMenu={(e) => openMenu(e, c)}
+            >
               <button
-                className={`channel-item ${activeChannelId === c.id ? 'active' : ''}`}
+                className={`channel-item ${activeChannelId === c.id ? 'active' : ''}${
+                  isGroup(c) ? ' channel-item-group' : ''
+                }`}
                 onClick={() => onSelect(c)}
-                title={`#${c.name}`}
+                /* ⚠️ 有子频道的父频道**不能再进去** ✗
+                   它已经变成一个分组标题了 ✓（用户明确要求的 ✓）
+                   用 disabled 而不是"点了不做事" ✓
+                   这样它连键盘 Tab 都到不了 ✓ 语义也对 ✓
+                   ⚠️ 但**右键菜单照旧** ✗ —— 那挂在外面那层 div 上 ✓
+                     所以"删除频道"这些还点得到 ✓ */
+                disabled={isGroup(c)}
+                title={isGroup(c) ? t('channel.groupTitle', { name: c.name }) : `#${c.name}`}
               >
-                <span className="channel-hash">#</span>
+                <span className="channel-hash">
+                  {/* 子频道的图标小一号 ✓ 视觉上自然就"退后一层" ✓ */}
+                  <HashIcon size={c.parent_id ? 14 : 16} />
+                </span>
                 {c.name}
               </button>
               {/* 删除挪到右键菜单了 —— 悬停就冒出来的 × 离频道名太近，
@@ -218,21 +277,40 @@ export function ChannelList({
 
       {voice.length > 0 && (
         <>
-          <div className="channel-group-title">语音频道</div>
-          {voice.map((c) => {
+          <div className="channel-group-title">{t('channel.voiceGroup')}</div>
+          {withKids(voice).map((c) => {
             {/* 按**进频道的先后**排，不按 LiveKit 返回的顺序 ——
                 那个不保证稳定，会让列表每 3 秒重排一次、看着像在乱跳 */}
             const members = withSuffixes(byJoinOrder(voiceRooms[c.id] ?? []))
             const joined = joinedRoomId === c.id
             return (
               <div key={c.id} className="voice-channel-block">
-                <div className="channel-row" onContextMenu={(e) => openMenu(e, c)}>
+                <div
+                  className={`channel-row${c.parent_id ? ' channel-row-child' : ''}`}
+                  onContextMenu={(e) => openMenu(e, c)}
+                >
                   <button
-                    className={`channel-item ${activeChannelId === c.id ? 'active' : ''}`}
+                    className={`channel-item ${activeChannelId === c.id ? 'active' : ''}${
+                      isGroup(c) ? ' channel-item-group' : ''
+                    }`}
                     onClick={() => onSelect(c)}
-                    title={`${c.name}（${joined ? '你在这个频道里' : '点击加入'}）`}
+                    /* ⚠️ 语音这边**更该禁** ✗
+                       点父频道会**真的加入那个 LiveKit 房间** ✓
+                       而子频道是另一个房间 ✓ 两个都进得去只会让人分不清 ✓
+                       （用户要求的正是"只能进子频道" ✓）*/
+                    disabled={isGroup(c)}
+                    title={
+                      isGroup(c)
+                        ? t('channel.groupTitle', { name: c.name })
+                        : t('channel.voiceTitle', {
+                            name: c.name,
+                            hint: joined ? t('channel.inThisChannel') : t('channel.join'),
+                          })
+                    }
                   >
-                    <span className="channel-hash">🔊</span>
+                    <span className="channel-hash">
+                      <SpeakerIcon size={c.parent_id ? 14 : 16} />
+                    </span>
                     {c.name}
                   </button>
 
@@ -276,10 +354,10 @@ export function ChannelList({
                             : 'idle'
 
                       const micTitle = {
-                        deaf: '已闭麦，喇叭也关了',
-                        muted: '已闭麦',
-                        speaking: '正在说话',
-                        idle: '麦克风开着',
+                        deaf: t('mic.deaf'),
+                        muted: t('mic.muted'),
+                        speaking: t('mic.speaking'),
+                        idle: t('mic.idle'),
                       }[micState]
 
                       return (
@@ -287,7 +365,7 @@ export function ChannelList({
                           key={refKey(m)}
                           className="voice-member"
                           onContextMenu={(e) => openMemberMenu(e, m)}
-                          title={self ? m.display : `${m.display} · 右键调整音量`}
+                          title={self ? m.display : t('member.rightClickVolume', { name: m.display })}
                         >
                           <Avatar raw={avatarOf(m)} name={m.display} size={20} />
                           <span className="voice-member-name" title={m.display}>
@@ -298,16 +376,16 @@ export function ChannelList({
                           {vol !== 1 && (
                             <span
                               className="voice-member-vol"
-                              title={`音量 ${Math.round(vol * 100)}%`}
+                              title={t('member.volume', { n: Math.round(vol * 100) })}
                             >
-                              {vol === 0 ? '🔇' : `${Math.round(vol * 100)}%`}
+                              {vol === 0 ? <SpeakerIcon size={12} off /> : `${Math.round(vol * 100)}%`}
                             </span>
                           )}
 
                           {/* 投屏灯。**位置恒定** —— 不投屏时也占着那一格，
                               否则右边那个麦克风灯会被推来推去、各人之间对不齐。 */}
                           <span className="voice-member-share">
-                            {m.sharing && <span className="led led-share" title="正在共享屏幕" />}
+                            {m.sharing && <span className="led led-share" title={t('member.sharing')} />}
                           </span>
 
                           <span className={`led led-mic led-${micState}`} title={micTitle} />
@@ -324,13 +402,13 @@ export function ChannelList({
 
       {canManage && (
         <button className="channel-add" onClick={onCreateChannel}>
-          + 创建频道
+          {t('channel.create')}
         </button>
       )}
 
       {channels.length === 0 && (
         <div className="muted small" style={{ padding: '12px 16px' }}>
-          还没连上服务端，连上后这里会显示频道列表。
+          {t('channel.empty')}
         </div>
       )}
       </div>
@@ -357,13 +435,13 @@ export function ChannelList({
                   onDeleteChannel(id)
                 }}
               >
-                删除频道
+                {t('channel.delete')}
               </button>
             ) : (
               <div className="context-menu-note">
                 {menu.channel.id === 'general'
-                  ? '默认频道不能删除'
-                  : '只有管理员以上能删除频道'}
+                  ? t('channel.cannotDeleteDefault')
+                  : t('channel.needAdmin')}
               </div>
             )
           ) : (
@@ -401,14 +479,16 @@ function VolumeSlider({
   onChange: (v: number) => void
   onReset: () => void
 }) {
+  // 这个滑块是独立组件 ✓ 得自己取一次 t ✗（不能从外面传进来 ✓ 那会多一层参数 ✓）
+  const t = useT()
   return (
     <>
       <div className="context-menu-slider">
         <div className="context-menu-slider-head">
-          <span>音量</span>
+          <span>{t('volume.title')}</span>
           <span className="muted">
-            {value === 0 ? '静音' : `${Math.round(value * 100)}%`}
-            {value > 1 ? '（增益）' : ''}
+            {value === 0 ? t('volume.mute') : `${Math.round(value * 100)}%`}
+            {value > 1 ? t('volume.gain') : ''}
           </span>
         </div>
         <input
@@ -423,7 +503,7 @@ function VolumeSlider({
 
       {value !== 1 && (
         <button className="context-menu-item" onClick={onReset}>
-          恢复默认音量
+          {t('volume.reset')}
         </button>
       )}
     </>

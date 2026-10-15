@@ -39,8 +39,9 @@ const STORAGE_KEY = 'voice.config.v2'
  *
  * ⚠️ 服务器在 NAT 后面时（家用宽带 / NAT 型 VPS），端口要按**映射后的**填 ✗
  *    例：公网 17707 → 内网 7880，这里就要写 17707 ✓
+ *    现在是**普通 VPS**（端口自由）：直接填 7880 / 3005 ✓
  *    另外 LiveKit 的 `tcp_port` / `udp_port` 会被写进给客户端的连接信息 ✓
- *    那两个端口必须**内外一致** ✓ 否则连不上或者没声音 ✗
+ *    普通 VPS 上内外是同一个端口，不用操心 ✓ NAT 机器上必须**内外一致** ✗
  *
  * ⚠️ 邀请码会**打包进安装包** ✗ ——
  *    任何拿到安装包的人都能接入你的服务器 ✓ 小圈子自用可以接受 ✓
@@ -49,8 +50,11 @@ const STORAGE_KEY = 'voice.config.v2'
  * 用户在设置面板里可以覆盖这三项 ✓（换服务器时不用重新打包 ✓）
  */
 export const DEFAULT_CONFIG: AppConfig = {
-  livekitUrl: 'ws://YOUR_SERVER_IP:17707',
-  apiUrl: 'http://YOUR_SERVER_IP:17706',
+  livekitUrl: 'ws://YOUR_SERVER_IP:7880',
+  apiUrl: 'http://YOUR_SERVER_IP:3005',
+  // ★ 新服务器（YOUR_SERVER_IP）的邀请码，由 init.sh 生成：
+  //    换服务器必须重跑 init.sh ✓ 它会生成**新的**码 ✗
+  //    旧服务器的 your-invite-code 对这台无效 ✗
   inviteCode: 'your-invite-code',
   nickname: '',
   avatar: DEFAULT_AVATAR,

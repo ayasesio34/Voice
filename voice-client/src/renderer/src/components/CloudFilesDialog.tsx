@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { formatBytes, isImageMime, type CloudFile, type FilesStats } from '../lib/api'
 import { canManage, type Role } from '../lib/names'
+import { FolderIcon } from './icons'
 
 type Props = {
   open: boolean
@@ -73,7 +74,9 @@ export function CloudFilesDialog({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal cloud-files" onClick={(e) => e.stopPropagation()}>
         <div className="cloud-header">
-          <h2>📁 云端文件</h2>
+          <h2>
+            <FolderIcon size={16} /> 云端文件
+          </h2>
           <span className="muted small">
             {stats.count} 个 · 共 {formatBytes(stats.bytes)}
           </span>

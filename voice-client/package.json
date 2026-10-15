@@ -1,6 +1,6 @@
 ﻿{
   "name": "voice-client",
-  "version": "0.43.0",
+  "version": "0.56.0",
   "private": true,
   "description": "自建语音软件桌面客户端",
   "main": "./out/main/index.js",
@@ -9,7 +9,7 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "node scripts/check-readme-md.mjs && node scripts/test-dataurl.mjs && node scripts/test-links.mjs && node scripts/test-media.mjs && node scripts/test-viewers.mjs && node scripts/test-chat-groups.mjs && node scripts/test-presets.mjs",
+    "test": "node scripts/check-readme-md.mjs && node scripts/test-dataurl.mjs && node scripts/test-links.mjs && node scripts/test-media.mjs && node scripts/test-viewers.mjs && node scripts/test-chat-groups.mjs && node scripts/test-presets.mjs && node scripts/test-i18n.mjs && node scripts/test-p2p-state.mjs",
     "audit:contrast": "electron scripts/audit-contrast.cjs",
     "pack": "electron-vite build && electron-builder --dir",
     "dist": "electron-vite build && electron-builder",
@@ -53,7 +53,7 @@
     "publish": [
       {
         "provider": "generic",
-        "url": "http://YOUR_SERVER_IP:17706/updates"
+        "url": "http://YOUR_SERVER_IP:3005/updates"
       }
     ],
     "win": {

@@ -1,0 +1,1015 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P2P 连通性诊断 — Voice</title>
+<style>
+  :root {
+    --bg:#1e1f22; --panel:#2b2d31; --panel2:#313338; --line:#3a3c42;
+    --text:#dbdee1; --muted:#949ba4; --accent:#5865f2;
+    --ok:#23a55a; --warn:#f0b232; --err:#f23f43;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:14px/1.65 "Segoe UI","Microsoft YaHei",system-ui,sans-serif; }
+  .wrap { max-width:980px; margin:0 auto; padding:22px 18px 60px; }
+  h1 { font-size:19px; margin:0 0 4px; }
+  .sub { color:var(--muted); font-size:13px; margin-bottom:20px; }
+  .card { background:var(--panel); border-radius:9px; padding:16px 18px; margin-bottom:14px; }
+  .card h2 { font-size:13px; margin:0 0 14px; color:var(--muted);
+             text-transform:uppercase; letter-spacing:.05em; font-weight:600; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; }
+  label { display:block; font-size:12px; color:var(--muted); margin-bottom:5px; }
+  input,select,textarea {
+    width:100%; padding:8px 10px; border-radius:5px; border:1px solid #1a1b1e;
+    background:#1e1f22; color:var(--text); font-size:13px; font-family:inherit;
+  }
+  textarea { min-height:64px; resize:vertical; font-family:Consolas,monospace; font-size:12px; }
+  button { padding:9px 16px; border-radius:5px; border:0; cursor:pointer;
+           background:var(--accent); color:#fff; font-size:13px; font-weight:500;
+           font-family:inherit; }
+  button:hover:not(:disabled) { filter:brightness(1.12); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  button.ghost { background:#4e5058; }
+  .row { display:flex; gap:9px; flex-wrap:wrap; align-items:center; margin-top:13px; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th,td { text-align:left; padding:6px 9px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:500; }
+  td.num { font-family:Consolas,monospace; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:9px; font-size:11.5px;
+          font-weight:500; white-space:nowrap; }
+  .pill.ok { background:rgba(35,165,90,.18); color:var(--ok); }
+  .pill.warn { background:rgba(240,178,50,.18); color:var(--warn); }
+  .pill.err { background:rgba(242,63,67,.18); color:var(--err); }
+  .pill.mute { background:#3a3c42; color:var(--muted); }
+  .kv { display:grid; grid-template-columns:130px 1fr; gap:6px 12px; font-size:13px; }
+  .kv dt { color:var(--muted); }
+  .kv dd { margin:0; font-family:Consolas,monospace; word-break:break-all; }
+  #log { background:#111214; border-radius:6px; padding:11px 13px; height:190px;
+         overflow-y:auto; font:12px/1.6 Consolas,"Courier New",monospace;
+         white-space:pre-wrap; color:var(--muted); }
+  #verdict { font-size:15px; padding:14px 16px; border-radius:7px; margin-top:14px;
+             display:none; line-height:1.7; }
+  #verdict.ok { background:rgba(35,165,90,.13); border:1px solid rgba(35,165,90,.35); }
+  #verdict.warn { background:rgba(240,178,50,.13); border:1px solid rgba(240,178,50,.35); }
+  #verdict.err { background:rgba(242,63,67,.13); border:1px solid rgba(242,63,67,.35); }
+  code { background:#1e1f22; padding:1px 5px; border-radius:3px; font-size:12px;
+         font-family:Consolas,monospace; }
+  .hint { color:var(--muted); font-size:12px; margin-top:9px; line-height:1.7; }
+  details summary { cursor:pointer; color:var(--muted); font-size:12.5px; }
+  .bar { height:8px; background:#1e1f22; border-radius:4px; overflow:hidden; margin-top:6px; }
+  .bar > i { display:block; height:100%; background:var(--accent); width:0; transition:width .25s; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>P2P 连通性诊断</h1>
+  <div class="sub">
+    回答四个问题：<b>两人能不能直连</b> · <b>打不通的话是什么 NAT 造成的</b> ·
+    <b>国内哪些 STUN 真的可达</b> · <b>打通之后实际能跑多少 Mbps</b>。
+    两个人各开一个页面、填同一个房间号，然后点「开始测试」。
+  </div>
+
+  <!-- ── 1. 连接 ─────────────────────────────────────────── -->
+  <div class="card">
+    <h2>1 · 信令</h2>
+    <div class="grid">
+      <div>
+        <label>信令服务器</label>
+        <input id="wsUrl" spellcheck="false">
+      </div>
+      <div>
+        <label>房间号（两人填一样的）</label>
+        <input id="room" value="test1" spellcheck="false">
+      </div>
+      <div>
+        <label>邀请码</label>
+        <input id="code" type="password" spellcheck="false" placeholder="服务器上的 INVITE_CODE">
+      </div>
+    </div>
+    <div class="row">
+      <button id="btnConn">连接信令</button>
+      <span id="connState" class="pill mute">未连接</span>
+      <span id="peerState" class="pill mute">对端 0</span>
+    </div>
+    <div class="hint">
+      房间号只是给服务器用来转发信令的，随便取，但要两人一致。
+      <br>⚠️ 这一步只交换 SDP 和 ICE 候选（几 KB），媒体**不走服务器**。
+    </div>
+  </div>
+
+  <!-- ── 2. 本机网络 ─────────────────────────────────────── -->
+  <div class="card">
+    <h2>2 · 本机网络</h2>
+    <dl class="kv" id="localNet">
+      <dt>公网 IPv4</dt><dd id="v4">—</dd>
+      <dt>公网 IPv6</dt><dd id="v6">—</dd>
+      <dt>UDP 出站</dt><dd id="udp">—</dd>
+      <dt>NAT 映射行为</dt><dd id="natType">—</dd>
+      <dt>本地地址</dt><dd id="hosts">—</dd>
+    </dl>
+    <div class="row">
+      <button id="btnLocal" class="ghost">重新探测本机</button>
+    </div>
+    <div class="hint" id="natHint"></div>
+  </div>
+
+  <!-- ── 3. STUN 可达性 ──────────────────────────────────── -->
+  <div class="card">
+    <h2>3 · STUN 服务器可达性</h2>
+    <div class="hint" style="margin:0 0 10px">
+      国内网络环境下 Google 的 STUN 常常不可达，所以要把可达的挑出来。
+      可以自己加，一行一个 <code>host:port</code>。
+    </div>
+    <textarea id="stunList" spellcheck="false"></textarea>
+    <div class="row">
+      <button id="btnStun" class="ghost">逐个测试</button>
+      <span id="stunState" class="pill mute">未测试</span>
+    </div>
+    <div id="stunResult" style="margin-top:12px"></div>
+  </div>
+
+  <!-- ── 4. 直连测试 ─────────────────────────────────────── -->
+  <div class="card">
+    <h2>4 · 直连测试</h2>
+    <div class="hint" style="margin:0 0 12px">
+      两边都要先连上信令、并且看到「对端 1」，然后 <b>两边各点一次</b>「开始直连测试」。
+      谁是主叫由服务器按加入顺序决定，不会两边同时发 offer。
+      <br>⚠️ <b>只点一边不够</b> ✗ —— 没点的那边还没建立连接对象，收到 offer 也接不住。
+    </div>
+    <div class="row">
+      <button id="btnP2P">开始直连测试</button>
+      <button id="btnStop" class="ghost" disabled>停止</button>
+      <span id="p2pState" class="pill mute">未开始</span>
+    </div>
+
+    <div id="p2pResult" style="margin-top:14px; display:none">
+      <table>
+        <tbody>
+          <tr><th style="width:150px">建立用时</th><td class="num" id="rTime">—</td></tr>
+          <tr><th>选中的候选对</th><td class="num" id="rPair">—</td></tr>
+          <tr><th>链路类型</th><td id="rKind">—</td></tr>
+          <tr><th>上行吞吐（主叫→被叫）</th><td class="num" id="rUp">—</td></tr>
+        </tbody>
+      </table>
+      <div class="bar"><i id="rBar"></i></div>
+      <div class="hint" id="rThroughputNote"></div>
+    </div>
+
+    <div id="verdict"></div>
+
+    <details style="margin-top:14px">
+      <summary>全部候选对（排查用）</summary>
+      <div id="pairTable" style="margin-top:10px"></div>
+    </details>
+  </div>
+
+  <!-- ── 5. 日志 ─────────────────────────────────────────── -->
+  <div class="card">
+    <h2>5 · 日志</h2>
+    <div id="log"></div>
+    <div class="row">
+      <button id="btnCopy" class="ghost">复制全部结果</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+'use strict';
+
+// ═══════════════════════════════════════════════════════════
+//  P2P 连通性诊断
+//
+//  为什么需要这个页面 ✗
+//    投屏现在全走 SFU，6 Mbps 的机器只够一个人看。
+//    想改成 P2P 直连，但"能不能直连"取决于双方的 NAT 类型、
+//    有没有 IPv6、同不同运营商 —— 这些**只有在真实网络里量**才知道。
+//
+//  这个页面测四件事 ✓
+//    ① 本机：公网地址 / UDP 出站 / NAT 映射行为（锥型 or 对称型）
+//    ② STUN：国内到底哪些服务器可达（逐个试 ✓ 不要照抄网上的列表 ✗）
+//    ③ 直连：两人之间能不能打通、用了几秒、走的是哪一类候选对
+//    ④ 吞吐：打通之后**实际**能跑多少 Mbps
+//       （能连 ≠ 能扛 4 Mbps 投屏 ✗ 这一项才是决定性判据）
+//
+//  ⚠️ 全部用浏览器原生 WebRTC API ✓ 不依赖任何外部库 ✓
+// ═══════════════════════════════════════════════════════════
+
+const $ = (id) => document.getElementById(id);
+const logLines = [];
+
+function log(msg) {
+  const t = new Date().toTimeString().slice(0, 8);
+  logLines.push(`[${t}] ${msg}`);
+  const el = $('log');
+  if (el) { el.textContent = logLines.join('\n'); el.scrollTop = el.scrollHeight; }
+}
+
+function setPill(el, text, kind) {
+  const n = typeof el === 'string' ? $(el) : el;
+  n.textContent = text;
+  n.className = 'pill ' + (kind || 'mute');
+}
+
+// ── 默认 STUN 候选（**都会实测** ✓ 不是断言它们可用 ✗）────────
+//
+// 照抄网上的列表没意义 —— 不同省份、不同运营商的封锁情况完全不同。
+// 所以这里只是"候选清单"，页面逐个去试，谁通用谁。
+const DEFAULT_STUN = [
+  'stun.qq.com:3478',
+  'stun.miwifi.com:3478',
+  'stun.chat.bilibili.com:3478',
+  'stun.hitv.com:3478',
+  'stun.cloudflare.com:3478',
+  'stun.syncthing.net:3478',
+  'stun.nextcloud.com:443',
+  'stun.l.google.com:19302',
+];
+
+// ═══════════════════════════════════════════════════════════
+//  ICE 候选解析
+//
+//  candidate 行的格式（SDP 里和 candidate 事件里都是这个）：
+//    candidate:842163049 1 udp 1677729535 203.0.113.5 54321 typ srflx \
+//              raddr 0.0.0.0 rport 0 generation 0 ufrag xxxx
+//  依次是：foundation 组件 传输 优先级 地址 端口 typ 类型 [raddr rport]
+// ═══════════════════════════════════════════════════════════
+
+function parseCandidate(line) {
+  const m = /^candidate:(\S+)\s+(\d+)\s+(\S+)\s+(\d+)\s+(\S+)\s+(\d+)\s+typ\s+(\S+)(.*)$/.exec(line);
+  if (!m) return null;
+  const rest = m[8] || '';
+  const raddr = /raddr\s+(\S+)/.exec(rest);
+  const rport = /rport\s+(\d+)/.exec(rest);
+  return {
+    foundation: m[1],
+    component: Number(m[2]),
+    transport: m[3],
+    priority: Number(m[4]),
+    address: m[5],
+    port: Number(m[6]),
+    type: m[7],
+    relatedAddress: raddr ? raddr[1] : '',
+    relatedPort: rport ? Number(rport[1]) : 0,
+  };
+}
+
+function isIPv6(addr) {
+  // mDNS 的 .local 名字不算 —— Chromium 默认用它隐藏本地 IP
+  return typeof addr === 'string' && addr.includes(':') && !addr.endsWith('.local');
+}
+function isMdns(addr) {
+  return typeof addr === 'string' && addr.endsWith('.local');
+}
+
+/**
+ * 候选收集器
+ *
+ * ⚠️ 必须把「收集到的数组」和「收集完成的信号」一起交出去 ✗
+ *    之前写成只返回一个 Promise ✓ 然后外面用 Promise.race 加超时 ✓
+ *    结果超时那条分支返回的是**空数组** ✗ 把已经收到的候选全丢了 ✓
+ *    于是本机明明有 host 候选 ✓ 却被报成 host=0 ✗（踩过 ✓）
+ */
+function makeCollector(pc) {
+  const out = [];
+  let finish;
+  const finished = new Promise((r) => { finish = r; });
+  pc.onicecandidate = (e) => {
+    if (!e.candidate || !e.candidate.candidate) return;
+    const c = parseCandidate(e.candidate.candidate);
+    if (c) out.push(c);
+  };
+  pc.onicegatheringstatechange = () => {
+    if (pc.iceGatheringState === 'complete') finish();
+  };
+  return { out, finished };
+}
+
+/**
+ * 用一组 STUN 服务器抓一次候选。
+ * 返回本机的公网映射（srflx）和本地地址（host）。
+ *
+ * ⚠️ 超时也要返回**已经收集到的** ✓ 不是空数组 ✗
+ */
+async function gatherIce(iceServers, timeoutMs = 6000) {
+  const pc = new RTCPeerConnection({ iceServers });
+  const { out, finished } = makeCollector(pc);
+  // 必须有个媒体或数据通道，否则不产生候选
+  pc.createDataChannel('probe');
+  try {
+    await pc.setLocalDescription(await pc.createOffer());
+  } catch (e) {
+    log('收集候选失败：' + e.message);
+  }
+
+  await Promise.race([finished, new Promise((r) => setTimeout(r, timeoutMs))]);
+  try { pc.close(); } catch {}
+  return out;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  本机网络探测
+// ═══════════════════════════════════════════════════════════
+
+async function probeLocal() {
+  log('开始探测本机网络…');
+  const stun = currentStun().map((u) => ({ urls: 'stun:' + u }));
+
+  const cands = await gatherIce(stun, 7000);
+  const srflx4 = cands.filter((c) => c.type === 'srflx' && !isIPv6(c.address));
+  const srflx6 = cands.filter((c) => c.type === 'srflx' && isIPv6(c.address));
+  const host4 = cands.filter((c) => c.type === 'host' && !isIPv6(c.address));
+  const host6 = cands.filter((c) => c.type === 'host' && isIPv6(c.address));
+
+  $('v4').textContent = srflx4.length
+    ? [...new Set(srflx4.map((c) => `${c.address}:${c.port}`))].join('  ')
+    : '（没拿到 —— STUN 全部不可达或 UDP 被封）';
+  $('v6').textContent = srflx6.length
+    ? [...new Set(srflx6.map((c) => `${c.address}:${c.port}`))].join('  ')
+    : (host6.length ? '（有 IPv6 本地地址，但没拿到公网 v6 映射）' : '（没有 IPv6）');
+  $('udp').innerHTML = srflx4.length || srflx6.length
+    ? '<span class="pill ok">通</span> 能向 STUN 发出 UDP'
+    : '<span class="pill err">不通</span> UDP 出站被挡，或 STUN 全不可达';
+
+  const localList = [...host4, ...host6]
+    .map((c) => (isMdns(c.address) ? '（被 mDNS 隐藏）' : `${c.address}${isIPv6(c.address) ? ' (v6)' : ''}`));
+  $('hosts').textContent = localList.length ? [...new Set(localList)].join('  ') : '（无）';
+
+  // ── NAT 映射行为 ────────────────────────────────────────
+  // 用**两个不同 IP** 的 STUN 各抓一次，比较映射出去的端口：
+  //   端口相同  → 端点无关映射（锥型）✓ 打洞成功率高
+  //   端口不同  → 地址/端口相关映射（对称型）✗ 打洞很难
+  // 这是判断"能不能直连"最有价值的一项，而且不用写 STUN 协议 ✓
+  await detectMappingBehavior();
+
+  log(`本机探测完成：srflx v4=${srflx4.length} v6=${srflx6.length} host=${cands.filter(c=>c.type==='host').length}`);
+  return { srflx4, srflx6, host4, host6 };
+}
+
+async function detectMappingBehavior() {
+  // 优先用**实测可用**的那几台 ✓ 因为下面要靠"应该回几台"来判断 ✓
+  // 还没测过 STUN 的话退回用户填的列表 ✓
+  const list = reachableStun.length >= 2 ? reachableStun : currentStun();
+  if (list.length < 2) {
+    $('natType').innerHTML = '<span class="pill warn">无法判断</span> 可用的 STUN 不到两台';
+    $('natHint').innerHTML =
+      '先在上面第 3 节把 STUN 测出来 ✓ 或者手动多填几台 ✓<br>' +
+      '⚠️ 这**不影响**看第 4 节的实测结果 ✓';
+    return null;
+  }
+
+  const picks = list.slice(0, 5);
+
+  // ⚠️⚠️ 必须用**同一个** RTCPeerConnection ✗
+  //
+  //   第一版写错了 ✓ 它建了**两个**连接、各配一台 STUN、然后比较映射端口 ✗
+  //   错在哪：每个连接用的是**不同的本地端口** ✓
+  //   而 NAT 映射是跟着"本地端口 + 目标地址"走的 ✓
+  //   所以就算是最标准的端点无关（锥型）NAT ✓
+  //   两个连接的映射端口**也一定不一样** ✗ → 一律被误判成"对称型" ✓
+  //
+  //   真实案例：某台机器被判成"对称型（打洞很难）" ✓
+  //   但同一台机器实测 **108ms 直连成功、102 Mbps** ✗
+  //   对称型不可能打通那么快 ✓ 所以是这个判法错了 ✓
+  //
+  //   正确做法：**一个**连接里配多台 STUN ✓
+  //   Chrome 会用**同一个本地 socket** 分别去打它们 ✓
+  //   这样比出来的映射端口才反映 NAT 的真实行为 ✓
+  //
+  //   ⚠️ 但还要注意 Chrome 会**去重** ✓
+  //      锥型 → 各台看到的映射一样 → 只留一个候选 ✓
+  //      地址相关 → 各台看到的不一样 → 留多个候选 ✓
+  //      所以：拿"实际响了几个不同的映射"和"应该有几台会回（picks.length）"比 ✓
+  const cands = await gatherIce(
+    picks.map((h) => ({ urls: /^\w+:/.test(h) ? h : 'stun:' + h })),
+    8000,
+  );
+
+  const srflx = cands.filter((c) => c.type === 'srflx' && !isIPv6(c.address));
+  const uniq = [...new Map(srflx.map((c) => [`${c.address}:${c.port}`, c])).values()];
+
+  if (uniq.length === 0) {
+    $('natType').innerHTML = '<span class="pill warn">无法判断</span> 一个映射地址都没拿到';
+    $('natHint').innerHTML =
+      'UDP 出不去，或者这些 STUN 这会儿都不通 ✓<br>' +
+      '⚠️ 这**不影响**看第 4 节的实测结果 ✓';
+    return null;
+  }
+
+  const detail = uniq.map((c) => `${c.address}:${c.port}`).join('<br>');
+  const asked = picks.length;
+  const got = uniq.length;
+
+  // 拿到的不同映射数 == 问过的 STUN 台数 → 每一台看到的都不一样 → 地址相关 ✓
+  if (got >= 2 && got === asked) {
+    // 顺带验证同源（relatedPort 一致才说明是同一个本地端口出去的 ✓）
+    const localPorts = new Set(uniq.map((c) => c.relatedPort).filter(Boolean));
+    if (localPorts.size !== 1) {
+      $('natType').innerHTML =
+        `<span class="pill warn">无法判断</span> 浏览器用了 ${
+          localPorts.size || '多'
+        } 个本地端口，映射值不可比`;
+      $('natHint').innerHTML = '这次探测得不出结论 ✗ 但**不影响**第 4 节的实测 ✓';
+      return null;
+    }
+    $('natType').innerHTML =
+      '<span class="pill warn">地址相关（偏对称型）</span> 打洞可能困难';
+    $('natHint').innerHTML =
+      `同一个本地端口 ${[...localPorts][0]} 访问 ${asked} 台 STUN，拿到 ${got} 个**不同**的映射 ✓<br>` +
+      '→ 属于地址/端口相关映射 ✓<br>' +
+      '⚠️ **但这只是"可能困难"，不等于打不通** ✗<br>' +
+      '端口如果按顺序分配 ✓ 端口预测扫描仍然能命中 ✓<br>' +
+      '★ **最终以第 4 节的实测结果为准** ✗ —— 分类只是参考 ✓<br>' +
+      '<span style="opacity:.7">' + detail + '</span>';
+    return 'symmetric';
+  }
+
+  // 只拿到一个不同映射，而问过多台 → 各台看到的都一样 → 端点无关 ✓
+  if (got === 1 && asked >= 2) {
+    $('natType').innerHTML = '<span class="pill ok">端点无关（锥型）</span> 打洞成功率高';
+    $('natHint').innerHTML =
+      `访问 ${asked} 台不同的 STUN，映射地址**完全相同**（${uniq[0].address}:${uniq[0].port}）✓<br>` +
+      '→ Chrome 会把这几个相同映射**去重成一个候选** ✓ 所以"只看到一个"正是锥型的特征 ✓<br>' +
+      '→ 打洞最容易成功 ✓<br>' +
+      '<span style="opacity:.7">（本地端口 ' + (uniq[0].relatedPort || '?') + '）</span>';
+    return 'cone';
+  }
+
+  $('natType').innerHTML =
+    `<span class="pill warn">介于两者之间</span> 问了 ${asked} 台、拿到 ${got} 个不同映射`;
+  $('natHint').innerHTML =
+    '部分 STUN 看到的映射一致、部分不一致 ✓ 属于"地址相关但端口无关"这一类 ✓<br>' +
+    '★ **以第 4 节的实测结果为准** ✓<br>' +
+    '<span style="opacity:.7">' + detail + '</span>';
+  return 'mixed';
+}
+
+// ═══════════════════════════════════════════════════════════
+//  STUN 可达性
+// ═══════════════════════════════════════════════════════════
+
+// 哪些 STUN 实测可用 —— detectMappingBehavior 要用它来判断"**应该**回几台" ✓
+//
+// ⚠️ 为什么需要这个 ✗
+//   一个连接里配多台 STUN 时，Chrome 会把**映射地址相同**的候选**去重** ✓
+//   锥型 NAT 下 5 台 STUN 看到的映射完全一样 ✓ → 只吐**一个** srflx 候选 ✓
+//   所以"数候选个数"会得出完全相反的结论 ✗（踩过 ✓）
+//   必须拿"实际响了几个不同映射"和"应该有几台会回"对比 ✓
+let reachableStun = [];
+
+function currentStun() {
+  return $('stunList').value
+    .split(/[\n,]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+async function testStunList() {
+  const list = currentStun();
+  if (!list.length) return;
+  setPill('stunState', '测试中…', 'warn');
+
+  // ⚠️ 必须**并行**测 ✗
+  //    第一版是 for 串行 await ✓ 每台不可达的要等满 5 秒超时 ✓
+  //    8 台里有 3 台不通就是 15 秒 ✓ 全不通就是 40 秒 ✓
+  //    并行之后总耗时 = 最慢的那一台 ✓ 大约 5 秒 ✓
+  const rows = await Promise.all(
+    list.map(async (host) => {
+      const url = /^\w+:/.test(host) ? host : 'stun:' + host;
+      const t0 = performance.now();
+      let cands = [];
+      try {
+        cands = await gatherIce([{ urls: url }], 5000);
+      } catch (e) {
+        log(`STUN ${host} 抛错：${e.message}`);
+      }
+      const ms = Math.round(performance.now() - t0);
+      const s = cands.find((c) => c.type === 'srflx');
+      const h = cands.find((c) => c.type === 'host');
+
+      // 有 host 候选但没有 srflx → 网络通、但这个 STUN 没回
+      let verdict;
+      if (s) verdict = `可用 · 映射为 ${s.address}:${s.port}`;
+      else if (h) verdict = '无响应（能出 UDP，但这台 STUN 没回）';
+      else if (cands.length) verdict = '只有 IPv6 候选';
+      else verdict = '完全不响应';
+
+      log(`STUN ${host} → ${s ? '可用 ✓' : '不可用 ✗'}（${ms}ms）`);
+      return { host, ok: !!s, verdict, ms };
+    }),
+  );
+
+  const okCount = rows.filter((r) => r.ok).length;
+  reachableStun = rows.filter((r) => r.ok).map((r) => r.host);
+
+  $('stunResult').innerHTML =
+    '<table><thead><tr><th>服务器</th><th>结果</th><th style="width:70px">耗时</th></tr></thead><tbody>' +
+    rows.map((r) =>
+      `<tr><td>${r.host}</td><td>${r.ok
+        ? `<span class="pill ok">${r.verdict}</span>`
+        : `<span class="pill err">${r.verdict}</span>`}</td><td class="num">${r.ms}ms</td></tr>`
+    ).join('') +
+    '</tbody></table>';
+
+  setPill('stunState', `${okCount}/${rows.length} 可用`, okCount ? 'ok' : 'err');
+
+  // 把可用的提到最前面，方便以后复制到客户端配置里
+  if (okCount) {
+    const good = rows.filter((r) => r.ok).map((r) => r.host);
+    const bad = rows.filter((r) => !r.ok).map((r) => r.host);
+    $('stunList').value = [...good, ...bad].join('\n');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  信令
+// ═══════════════════════════════════════════════════════════
+
+let ws = null;
+let myIdx = -1;
+let peerCount = 0;
+
+async function connectSignal() {
+  if (ws && ws.readyState <= 1) { log('信令已经连着'); return; }
+
+  // ⚠️ 用 file:// 直接打开这个 html 是**最常见**的失败原因 ✗
+  //    那样 location.host 是空的 ✓ 拼出来是 ws:///p2p-signal ✓
+  //    浏览器直接拒掉 ✓ 表现就是"点一下就断开" ✓ 但看不出为什么 ✓
+  if (location.protocol === 'file:') {
+    setPill('connState', '打开方式不对', 'err');
+    log('❌ 你是用文件方式打开的这个页面（地址栏是 file://）');
+    log('   请改用服务器地址打开：http://<服务器IP>:3005/p2p-check');
+    return;
+  }
+
+  const base = $('wsUrl').value.trim() || `ws://${location.host}/p2p-signal`;
+  const room = $('room').value.trim() || 'test1';
+  const code = $('code').value.trim();
+  const url = `${base}?room=${encodeURIComponent(room)}&code=${encodeURIComponent(code)}`;
+
+  log('连接信令：' + url.replace(/code=[^&]*/, 'code=***'));
+  setPill('connState', '连接中…', 'warn');
+
+  // ⚠️ 先探一次普通 HTTP ✗
+  //    WebSocket 握手失败时浏览器什么都不告诉你（只有 code 1006）✓
+  //    先用 fetch 打一下 /health ✓ 就能分清"服务器不可达"和"路由不对" ✓
+  try {
+    const healthUrl = base.replace(/^ws/, 'http').replace(/\/p2p-signal.*$/, '/health');
+    const r = await fetch(healthUrl, { cache: 'no-store' });
+    const j = await r.json();
+    log(`服务器可达 ✓ 版本 ${j.serverVersion ?? '?'}（HTTP ${r.status}）`);
+  } catch (e) {
+    log(`⚠️ 普通 HTTP 也打不通（${e.message}）—— 多半是地址/端口不对，或服务器没起来`);
+  }
+
+  ws = new WebSocket(url);
+
+  ws.onopen = () => { setPill('connState', '已连接', 'ok'); log('信令已连接 ✓'); };
+
+  // ⚠️ 一定要把 close code 打出来 ✗
+  //    没有它的话"连接失败"和"被服务器拒绝"长得一模一样 ✓ 没法查 ✓
+  ws.onclose = (e) => {
+    setPill('connState', '已断开', 'err');
+    const why = {
+      1000: '正常关闭',
+      1006: '握手就没成功 —— 地址/端口不对、服务器上没这个路由、或者被网络挡了',
+      1008: '被服务器拒绝（邀请码不对？）',
+      1011: '服务器内部报错',
+    }[e.code] ?? '未知原因';
+    log(`信令断开 ✗ code=${e.code} reason=${e.reason || '（无）'}`);
+    log(`   → ${why}`);
+  };
+  ws.onerror = () => log('信令报错 ✗（浏览器不提供细节，看下面的 close code）');
+  ws.onmessage = (e) => {
+    let m;
+    try { m = JSON.parse(e.data); } catch { return; }
+
+    if (m.t === 'err') {
+      const why = { bad_code: '邀请码不对', no_room: '没填房间号', room_full: '房间满了' }[m.msg] || m.msg;
+      setPill('connState', why, 'err');
+      log('信令被拒：' + why);
+      return;
+    }
+    if (m.t === 'peers') {
+      myIdx = m.idx;
+      peerCount = m.n - 1;
+      setPill('peerState', `对端 ${peerCount}`, peerCount ? 'ok' : 'mute');
+      if (peerCount === 1 && !lastPeerCount) log(`对端已就位（我是第 ${m.idx + 1} 个加入的）`);
+      lastPeerCount = peerCount;
+      return;
+    }
+    // ⚠️ 握手处理挂在**连接信令之后** ✗ 不能挂在 startP2P 里面 ✓
+    //    之前挂在 startP2P 里 ✓ 于是只有"点过开始按钮"的那一边才装着 handler ✓
+    //    被叫没点 → offer 发过来被**静默丢掉** ✗
+    //    现象只有一句"15 秒没建立连接" ✓ 极难查 ✓（测试抓出来的 ✓）
+    //    现在两边一连上信令就都能收 ✓ 谁先点开始都行 ✓
+    void handleSignal(m);
+  };
+}
+
+/** 收到对端的信令 ✓ 两边都装着这个 handler ✓ */
+async function handleSignal(m) {
+  if (m.t !== 'offer' && m.t !== 'answer' && m.t !== 'ice') return;
+
+  if (!pc) {
+    // 对端点了开始、我还没点 —— 说清楚，别让人以为坏了 ✓
+    log(`收到对端的 ${m.t}，但本机还没开始测试 → 请也点一下「开始直连测试」`);
+    setPill('p2pState', '对端在等你也点开始', 'warn');
+    return;
+  }
+
+  try {
+    if (m.t === 'offer' && myIdx !== 0) {
+      log('收到 offer，回 answer');
+      await pc.setRemoteDescription({ type: 'offer', sdp: m.sdp });
+      const ans = await pc.createAnswer();
+      await pc.setLocalDescription(ans);
+      signal({ t: 'answer', sdp: pc.localDescription.sdp, from: myIdx });
+    } else if (m.t === 'answer' && myIdx === 0) {
+      log('收到 answer');
+      t0 = performance.now();
+      await pc.setRemoteDescription({ type: 'answer', sdp: m.sdp });
+    } else if (m.t === 'ice') {
+      try { await pc.addIceCandidate({ candidate: m.c, sdpMid: '0' }); } catch {}
+    }
+  } catch (e) {
+    log('信令处理出错：' + e.message);
+  }
+}
+let lastPeerCount = 0;
+
+function signal(obj) {
+  if (!ws || ws.readyState !== 1) { log('信令没连上，发不出去 ✗'); return; }
+  ws.send(JSON.stringify(obj));
+}
+
+// ═══════════════════════════════════════════════════════════
+//  直连 + 吞吐测试
+// ═══════════════════════════════════════════════════════════
+
+let pc = null;
+let dc = null;
+let t0 = 0;
+let connectedMs = 0;
+let running = false;
+let rxTimer = null;
+
+function rtcConfig() {
+  return {
+    iceServers: currentStun().slice(0, 6).map((u) => ({ urls: /^\w+:/.test(u) ? u : 'stun:' + u })),
+    // 诊断页不禁用任何候选类型 —— 我们要看到全部
+    iceCandidatePoolSize: 2,
+  };
+}
+
+async function startP2P() {
+  if (peerCount < 1) { log('还没看到对端，等一下 ✗'); return; }
+  if (running) { log('已经在跑了'); return; }
+
+  running = true;
+  $('btnP2P').disabled = true;
+  $('btnStop').disabled = false;
+  $('p2pResult').style.display = 'none';
+  $('verdict').style.display = 'none';
+  rxTotal = 0;
+  measuring = false;
+  finishedOnce = false;
+  connectedMs = 0;
+  setPill('p2pState', '建立中…', 'warn');
+
+  pc = new RTCPeerConnection(rtcConfig());
+  pc.onicecandidate = (e) => {
+    if (e.candidate) signal({ t: 'ice', c: e.candidate.candidate, from: myIdx });
+  };
+  pc.onconnectionstatechange = () => {
+    log('连接状态：' + pc.connectionState);
+    if (pc.connectionState === 'connected' && !connectedMs) {
+      connectedMs = Math.round(performance.now() - t0);
+      setPill('p2pState', '已直连', 'ok');
+      log(`✅ 直连成功，用时 ${connectedMs} ms`);
+      void reportPair();
+    }
+    if (pc.connectionState === 'failed') {
+      setPill('p2pState', '连接失败', 'err');
+      log('❌ 连接失败 —— 两边打不通');
+      finish(false);
+    }
+  };
+
+  // 谁是主叫由**加入顺序**决定 ✓ 避免两边同时发 offer（glare）
+  const amCaller = myIdx === 0;
+  log(`我是第 ${myIdx + 1} 个加入的 → ${amCaller ? '主叫' : '被叫'}`);
+
+  if (amCaller) {
+    dc = pc.createDataChannel('tp', { ordered: false, maxRetransmits: 0 });
+    wireDataChannel(dc);
+    t0 = performance.now();
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    signal({ t: 'offer', sdp: pc.localDescription.sdp, from: myIdx });
+    log('已发出 offer');
+  } else {
+    pc.ondatachannel = (e) => { dc = e.channel; wireDataChannel(dc); log('收到数据通道'); };
+  }
+
+  // 握手处理不在这里 ✗ 在模块级的 handleSignal 里 ✓
+  // （挂在连接信令之后，两边都装得上 —— 见上面的注释）
+
+  // 兜底：15 秒还没连上就判失败（有人点了开始、对端没点）
+  setTimeout(() => {
+    if (running && !connectedMs) {
+      log('15 秒内没建立连接 ✗');
+      finish(false);
+    }
+  }, 15000);
+}
+
+// ── 吞吐测量 ────────────────────────────────────────────────
+//
+// ⚠️ 不能"每秒取一个瞬时值、最后读一个" ✗
+//    第一版就是这么写的 ✓ 灌数据到第 6 秒停 ✓ 而读数发生在第 7 秒 ✓
+//    那一秒收到的只是缓冲区排空 ✓ 测出来偏低 ✓
+//    这个数字直接决定"要不要做 P2P" ✗ 测歪了会误导决策 ✓
+//
+// 现在改成**明确的计时窗口** ✓
+//    主叫：发 START → 灌 6 秒 → 发 STOP
+//    被叫：收到 START 开始累加 ✓ 收到 STOP 停止计时 ✓ 用总量÷时长 ✓
+//    然后把结果回传给主叫 ✓ 两边数字一致 ✓
+//
+// ⚠️ 文本帧传控制消息、二进制帧传数据 ✓ 必须分开处理 ✓
+// ⚠️ 这是**应用层**吞吐 ✓ 不等于链路带宽 ✓
+//    受分片大小、流控、DataChannel 参数影响 ✓ 只能当参考量级 ✓
+
+let measuring = false;
+let rxTotal = 0;
+let measureStart = 0;
+let finishedOnce = false;
+
+function showRate(mbps, note) {
+  $('rUp').textContent = mbps.toFixed(2) + ' Mbps' + (note || '');
+  $('rBar').style.width = Math.min(100, (mbps / 20) * 100) + '%';
+}
+
+function wireDataChannel(ch) {
+  ch.binaryType = 'arraybuffer';
+  ch.onopen = () => {
+    log('数据通道已打开，开始测吞吐…');
+    setPill('p2pState', '测吞吐中…', 'warn');
+    // 只有主叫发 ✓ 因为投屏关心的就是"分享者往上发"这一个方向
+    if (myIdx === 0) void runSender(ch);
+
+    // 兜底：万一 STOP 或回报丢了，不能让页面永远停在"测吞吐中" ✗
+    setTimeout(() => { if (running && !finishedOnce) finish(true); }, 12000);
+  };
+
+  ch.onmessage = (e) => {
+    if (typeof e.data === 'string') { void onText(ch, e.data); return; }
+    if (measuring) rxTotal += e.data.byteLength ?? e.data.length ?? 0;
+  };
+
+  ch.onclose = () => { if (rxTimer) clearInterval(rxTimer); };
+}
+
+async function onText(ch, s) {
+  if (s === 'START') {
+    rxTotal = 0;
+    measuring = true;
+    measureStart = performance.now();
+    log('收到 START，开始计时（6 秒）…');
+    // 每秒刷一下瞬时值，纯为了让人看到在动 ✓ 判定不靠它 ✓
+    if (rxTimer) clearInterval(rxTimer);
+    let last = 0;
+    rxTimer = setInterval(() => {
+      if (!measuring) return;
+      const inst = ((rxTotal - last) * 8) / 1e6;
+      last = rxTotal;
+      showRate(inst, ' （瞬时…）');
+    }, 1000);
+    return;
+  }
+
+  if (s === 'STOP') {
+    if (!measuring) return;
+    measuring = false;
+    if (rxTimer) { clearInterval(rxTimer); rxTimer = null; }
+    const secs = (performance.now() - measureStart) / 1000;
+    const mbps = (rxTotal * 8) / 1e6 / Math.max(secs, 0.001);
+    showRate(mbps);
+    log(`收到 STOP：${(rxTotal / 1e6).toFixed(1)} MB / ${secs.toFixed(2)}s = ${mbps.toFixed(2)} Mbps`);
+    try { ch.send('R:' + mbps.toFixed(2)); } catch {}
+    setTimeout(() => { if (running && !finishedOnce) finish(true); }, 400);
+    return;
+  }
+
+  if (s.startsWith('R:')) {
+    const mbps = Number(s.slice(2));
+    if (Number.isFinite(mbps)) {
+      showRate(mbps, '（对端回报）');
+      log(`对端回报上行 ${mbps.toFixed(2)} Mbps`);
+    }
+    setTimeout(() => { if (running && !finishedOnce) finish(true); }, 400);
+  }
+}
+
+/** 主叫：灌 6 秒数据，用 START / STOP 标出计时窗口 */
+async function runSender(ch) {
+  const CHUNK = 64 * 1024;
+  const buf = new Uint8Array(CHUNK);
+  ch.bufferedAmountLowThreshold = 1024 * 1024;
+  try { ch.send('START'); } catch {}
+
+  const deadline = performance.now() + 6000;
+  let sent = 0;
+  while (performance.now() < deadline && ch.readyState === 'open') {
+    if (ch.bufferedAmount > 8 * 1024 * 1024) {
+      // 流控：等缓冲区降下来 ✓ 但要带超时，否则对端一卡就永远等下去 ✗
+      await new Promise((r) => {
+        ch.onbufferedamountlow = () => r();
+        setTimeout(r, 200);
+      });
+      continue;
+    }
+    ch.send(buf);
+    sent += CHUNK;
+  }
+  try { ch.send('STOP'); } catch {}
+  log(`主叫共发出 ${(sent / 1e6).toFixed(1)} MB`);
+}
+
+async function reportPair() {
+  try {
+    const stats = await pc.getStats();
+    const pairs = [];
+    let selected = null;
+    stats.forEach((s) => {
+      if (s.type === 'candidate-pair') {
+        const local = stats.get(s.localCandidateId);
+        const remote = stats.get(s.remoteCandidateId);
+        const row = {
+          state: s.state,
+          nominated: !!s.nominated,
+          localType: local?.candidateType ?? '?',
+          localAddr: local ? `${local.address ?? local.ip}:${local.port}` : '?',
+          localProto: local?.protocol ?? '?',
+          remoteType: remote?.candidateType ?? '?',
+          remoteAddr: remote ? `${remote.address ?? remote.ip}:${remote.port}` : '?',
+          rtt: s.currentRoundTripTime,
+        };
+        pairs.push(row);
+        if (s.state === 'succeeded' && s.nominated) selected = row;
+      }
+    });
+
+    if (selected) {
+      $('rTime').textContent = connectedMs + ' ms';
+      $('rPair').textContent = `${selected.localType} → ${selected.remoteType}  (${selected.localProto})`;
+      $('rKind').innerHTML = describePair(selected);
+      $('rThroughputNote').innerHTML =
+        selected.rtt != null ? `当前 RTT ≈ ${(selected.rtt * 1000).toFixed(0)} ms` : '';
+    }
+
+    $('pairTable').innerHTML = pairs.length
+      ? '<table><thead><tr><th>状态</th><th>本地</th><th>远端</th><th>RTT</th></tr></thead><tbody>' +
+        pairs.map((p) =>
+          `<tr><td>${p.state}${p.nominated ? ' ★' : ''}</td>` +
+          `<td class="num">${p.localType} ${p.localAddr} ${p.localProto}</td>` +
+          `<td class="num">${p.remoteType} ${p.remoteAddr}</td>` +
+          `<td class="num">${p.rtt != null ? (p.rtt * 1000).toFixed(0) + 'ms' : '—'}</td></tr>`
+        ).join('') +
+        '</tbody></table>'
+      : '（拿不到候选对）';
+
+    $('p2pResult').style.display = '';
+  } catch (e) {
+    log('取 stats 失败：' + e.message);
+  }
+}
+
+function describePair(p) {
+  const t = `${p.localType}/${p.remoteType}`;
+  if (t.includes('relay')) return '<span class="pill warn">走了中继</span> 媒体经过服务器';
+  if (p.localAddr.startsWith('192.') || p.localAddr.startsWith('10.') ||
+      p.localAddr.startsWith('172.') || p.localType === 'host') {
+    return '<span class="pill ok">局域网直连</span> 同一内网';
+  }
+  if (t.includes('prflx')) return '<span class="pill ok">打洞成功</span> 经 STUN 反射地址直连';
+  return '<span class="pill ok">公网直连</span> 经 STUN 反射地址直连';
+}
+
+let lastUpMbps = 0;
+
+function finish(ok) {
+  running = false;
+  finishedOnce = true;
+  measuring = false;
+  $('btnP2P').disabled = false;
+  $('btnStop').disabled = true;
+  if (rxTimer) { clearInterval(rxTimer); rxTimer = null; }
+
+  const v = $('verdict');
+  v.style.display = '';
+
+  if (!ok) {
+    setPill('p2pState', '失败', 'err');
+    v.className = 'err';
+    v.innerHTML =
+      '<b>直连失败</b><br>' +
+      '两边打不通。常见原因：双方都是对称型 NAT ✗ 或有一方 UDP 被挡 ✗<br>' +
+      '可以看上面第 2 节的 NAT 映射行为，以及第 3 节有没有可用 STUN。<br>' +
+      '这种情况 P2P 方案要依赖中继兜底。';
+    return;
+  }
+
+  // 等吞吐数字落地再判定（上面每秒刷新一次）
+  setTimeout(() => {
+    const mbps = parseFloat($('rUp').textContent) || 0;
+    lastUpMbps = mbps;
+    setPill('p2pState', '完成', 'ok');
+
+    if (mbps >= 4) {
+      v.className = 'ok';
+      v.innerHTML = `<b>P2P 完全可用 ✓</b><br>实测上行 <b>${mbps.toFixed(2)} Mbps</b>，
+        足够 720p30（4 Mbps）甚至更高档位。<br>投屏走 P2P 可以完全绕开服务器带宽。`;
+    } else if (mbps >= 2.5) {
+      v.className = 'warn';
+      v.innerHTML = `<b>P2P 可用，但要降档 ⚠️</b><br>实测上行 <b>${mbps.toFixed(2)} Mbps</b>，
+        够 2.5 Mbps 省流档 ✓ 不够 4 Mbps 档 ✗<br>
+        （注意：这个数字受测速时长和数据通道参数影响，只能当参考量级）`;
+    } else {
+      v.className = 'err';
+      v.innerHTML = `<b>连通但太慢 ✗</b><br>实测上行只有 <b>${mbps.toFixed(2)} Mbps</b>，
+        扛不住投屏。<br>可能原因：跨运营商绕路、无线链路、或者对端在上传别的东西。`;
+    }
+  }, 1600);
+}
+
+function stopAll() {
+  running = false;
+  $('btnP2P').disabled = false;
+  $('btnStop').disabled = true;
+  if (rxTimer) { clearInterval(rxTimer); rxTimer = null; }
+  try { dc?.close(); } catch {}
+  try { pc?.close(); } catch {}
+  pc = null; dc = null;
+  setPill('p2pState', '已停止', 'mute');
+  log('已停止并清理连接');
+}
+
+// ═══════════════════════════════════════════════════════════
+//  启动
+// ═══════════════════════════════════════════════════════════
+
+(function init() {
+  $('wsUrl').value = `ws://${location.host}/p2p-signal`;
+  $('stunList').value = DEFAULT_STUN.join('\n');
+
+  // 允许用 ?code=xxx&room=yyy 直接带参数打开，省得每个人手打
+  const q = new URLSearchParams(location.search);
+  if (q.get('code')) $('code').value = q.get('code');
+  if (q.get('room')) $('room').value = q.get('room');
+
+  $('btnConn').onclick = connectSignal;
+  $('btnLocal').onclick = () => { void probeLocal(); };
+  $('btnStun').onclick = () => { void testStunList(); };
+  $('btnP2P').onclick = () => { void startP2P(); };
+  $('btnStop').onclick = stopAll;
+
+  $('btnCopy').onclick = async () => {
+    const text =
+      '=== P2P 诊断 ===\n' +
+      `公网 v4: ${$('v4').textContent}\n` +
+      `公网 v6: ${$('v6').textContent}\n` +
+      `UDP: ${$('udp').textContent}\n` +
+      `NAT: ${$('natType').textContent}\n` +
+      `本地: ${$('hosts').textContent}\n` +
+      `STUN: ${$('stunState').textContent}\n` +
+      `直连: ${$('p2pState').textContent}\n` +
+      `用时: ${$('rTime').textContent}\n` +
+      `候选对: ${$('rPair').textContent}\n` +
+      `链路: ${$('rKind').textContent}\n` +
+      `上行: ${$('rUp').textContent}\n\n` +
+      logLines.join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      log('已复制到剪贴板 ✓ 直接发给对方/我即可');
+    } catch {
+      log('复制失败，手动选中日志区复制吧');
+    }
+  };
+
+  log('诊断页已就绪。正在自动测 STUN…');
+  // ⚠️ 顺序不能反 ✗
+  //    detectMappingBehavior 要靠 reachableStun 判断"**应该**回几台" ✓
+  //    所以必须先测出哪些 STUN 可用 ✓ 再探本机 ✓
+  //    反过来的话它只能退回用户填的列表 ✓ 里面混着不可达的 ✓ 结论就不准 ✓
+  void (async () => {
+    await testStunList();
+    await probeLocal();
+  })();
+})();
+</script>
+</body>
+</html>

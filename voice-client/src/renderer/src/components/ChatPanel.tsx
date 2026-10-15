@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { formatBytes, isImageMime, type ChatMessage, type FileRef } from '../lib/api'
 import { blockWantsBubble, groupMessages } from '../lib/chatGroups'
-import { CameraIcon, PaperclipIcon, SearchIcon, SmileIcon } from './icons'
+import { CameraIcon, HashIcon, PaperclipIcon, PinIcon, SearchIcon, SmileIcon } from './icons'
 import { Avatar } from './Avatar'
+import { useT, useLang, type Lang, type TFn } from '../lib/i18n'
 import { EmojiPicker } from './EmojiPicker'
 import { ImageViewer } from './ImageViewer'
 
@@ -21,7 +22,7 @@ type Props = {
   /** 由文件 id 拼出预览/下载地址 */
   fileHref: (id: string) => string
   /** 发消息。attachment 是已经上传好的文件，可以是 null */
-  onSend: (body: string, attachment: FileRef | null) => void
+  onSend: (body: string, attachment: FileRef | null, replyTo?: number | null) => void
   /** 上传文件。失败时抛异常，异常信息显示在输入框上方 */
   onUpload: (file: File) => Promise<FileRef>
   /** 用系统程序打开（下载非图片附件、或看大图） */
@@ -46,6 +47,57 @@ type Props = {
    * 让每个人都能点、点了再被拒，体验更差。
    */
   onDeleteMessage?: (id: number) => void
+  /**
+   * 正在回复的那条消息。`null` = 没在回复 ✓
+   *
+   * ⚠️ 传的是**整条消息**不是 id ✗
+   *    因为输入框上方那条提示要显示"回复 某某：原文" ✓
+   *    只给 id 的话还得再回头去列表里找一次 ✓
+   */
+  replyTo?: ChatMessage | null
+  /** 右键菜单点了「回复」 */
+  onReply?: (m: ChatMessage) => void
+  /** 取消回复（点输入框上方提示条里那个 × ✓） */
+  onCancelReply?: () => void
+  /**
+   * 我自己的 userId。
+   *
+   * ⚠️ 表态芯片要判断"**我点过没有**" ✗
+   *    服务端下发的是 `users: [{id,name}]` ✓ 只给事实 ✓
+   *    不做成可选的（`?? ''`）是因为：为空时所有芯片都显示成"没点过" ✓
+   *    那是一种**看起来正常、其实全错**的状态 ✓ 不如让类型强制传 ✓
+   */
+  myUserId: string
+  /**
+   * 给某条消息加/取消一个 emoji 表态。
+   *
+   * 不传就不显示任何表态入口 ✓（和 `onDeleteMessage` 一个套路 ✓）
+   */
+  onReact?: (messageId: number, emoji: string) => void
+  /**
+   * 置顶 / 取消置顶某条消息（同一个回调管两个方向 ✓ 服务端是 toggle ✓）
+   */
+  onPin?: (messageId: number) => void
+  /**
+   * 打开置顶面板时调它去**拉列表** ✗
+   *
+   * ⚠️ 为什么列表不由 ChatPanel 自己拉 ✗
+   *    因为服务端广播 `pinned` 的时候，App 那边也要能顺手刷新它 ✓
+   *    列表状态放在 App 里，两边才看得到同一份 ✓
+   *    ChatPanel 只负责"开没开"这个纯界面状态 ✓
+   */
+  onLoadPinned?: () => void
+  /** 置顶消息列表（App 拉的 ✓ 顺序是服务端排好的：按置顶时间倒序 ✓） */
+  pinned?: ChatMessage[]
+  /**
+   * 置顶状态变化的**计数器**。App 每收到一次 `pinned` 广播就 +1 ✓
+   *
+   * ⚠️ 为什么不直接传回调进来在事件里调 ✗
+   *    因为"面板开着没有"这个状态在 ChatPanel 里 ✓ App 看不到 ✓
+   *    App 只知道"置顶状态变了" ✓ 该不该刷新得由面板自己决定 ✓
+   *    所以用一个会变的数字当信号 ✓ 面板开着才响应 ✓
+   */
+  pinnedTick?: number
   /**
    * 用**系统浏览器**打开一个链接。
    *
@@ -76,11 +128,16 @@ type Props = {
  * 为什么当天之外**必须**带：聊天记录往往横跨好几天，
  * 只显示时间的话，"今天说的"和"上周说的"在界面上长得一模一样。
  */
-function formatStamp(ts: number): string {
+function formatStamp(ts: number, t: TFn, lang: Lang): string {
   const d = new Date(ts)
   const now = new Date()
   // 只到分钟 —— 聊天的惯例，秒太啰嗦。要看精确时间可以悬停
-  const time = d.toLocaleTimeString('zh-CN', {
+  //
+  // ⚠️ 区域不能再写死 `'zh-CN'` ✗
+  //    之前是写死的 ✓ 于是切到英文之后时间还是中文格式 ✓
+  //    （中文是 `2026/10/14` ✓ 英文该是 `10/14/2026` ✗）
+  //    现在用当前语言 ✓ 跟着界面一起变 ✓
+  const time = d.toLocaleTimeString(lang, {
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
@@ -88,14 +145,14 @@ function formatStamp(ts: number): string {
 
   if (d.toDateString() === now.toDateString()) return time
 
-  const md = `${d.getMonth() + 1}月${d.getDate()}日`
+  const md = t('chat.dateMd', { m: d.getMonth() + 1, d: d.getDate() })
   if (d.getFullYear() === now.getFullYear()) return `${md} ${time}`
-  return `${d.getFullYear()}年${md} ${time}`
+  return t('chat.dateFull', { y: d.getFullYear(), md, time })
 }
 
 /** 悬停提示里给**完整**日期时间，把简写的歧义补掉 */
-function fullStamp(ts: number): string {
-  return new Date(ts).toLocaleString('zh-CN', { hour12: false })
+function fullStamp(ts: number, lang: Lang): string {
+  return new Date(ts).toLocaleString(lang, { hour12: false })
 }
 
 /**
@@ -128,7 +185,16 @@ const URL_RE = /https?:\/\/[^\s<>"'\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]+/g
 const TRAILING_PUNCT = /[.,;:!?，。；：！？）】》…、]+$/
 
 /** 把一段纯文本切成「文本 / 链接 / 文本」的片段 */
-function renderBody(text: string, onOpen: (url: string) => void): React.ReactNode[] {
+function renderBody(
+  text: string,
+  onOpen: (url: string) => void,
+  /**
+   * ⚠️ `t` 要**当参数传进来** ✗
+   *    这是个普通函数、不是组件 ✓ 用不了 hook ✓
+   *    （和上面那两个时间格式化函数同一个道理 ✓）
+   */
+  t: TFn
+): React.ReactNode[] {
   const out: React.ReactNode[] = []
   let last = 0
 
@@ -145,7 +211,7 @@ function renderBody(text: string, onOpen: (url: string) => void): React.ReactNod
         key={`${start}-${url}`}
         className="chat-link"
         href={url}
-        title={`${url}\n（点击用系统浏览器打开）`}
+        title={`${url}\n` + t('chat.openInBrowser')}
         onClick={(e) => {
           // 拦下来 —— 不然 Electron 会在**应用窗口里**导航过去，
           // 聊天界面就没了（这正是"点图片跳浏览器"那次的同类问题）
@@ -219,9 +285,22 @@ export function ChatPanel({
   searching,
   searchAuthors,
   onDeleteMessage,
+  replyTo,
+  onReply,
+  onCancelReply,
+  myUserId,
+  onReact,
+  onPin,
+  onLoadPinned,
+  pinned = [],
+  pinnedTick = 0,
   onOpenLink,
   avatarOf,
 }: Props) {
+  /** 界面文案 ✓ 语言一变这个组件自动重渲染 ✓ */
+  const t = useT()
+  const lang = useLang()
+
   const [draft, setDraft] = useState('')
   /** 已经传上服务器、还没发出去的那个附件 */
   const [pending, setPending] = useState<FileRef | null>(null)
@@ -307,6 +386,40 @@ export function ChatPanel({
   }, [draft])
 
   const [emojiOpen, setEmojiOpen] = useState(false)
+  /**
+   * 正在给**哪一条消息**挑表态表情。`null` = 没在挑 ✓
+   *
+   * ⚠️ 它和 `emojiOpen` **互斥** ✗
+   *    两个都复用同一个 `.emoji-wrap` 容器（定位是现成的 ✓ 不想再调一遍 ✗）
+   *    同时开着的话两个选择器会**叠在一起** ✓ 点哪个都乱 ✓
+   *    所以开一个必须先关另一个 ✓ 见下面那几个 onClick ✓
+   */
+  const [reactFor, setReactFor] = useState<number | null>(null)
+  /**
+   * 置顶面板开没开。
+   *
+   * ⚠️ 它和搜索栏**互斥** ✗
+   *    两个都贴着标题栏下面展开 ✓ 同时开着会挤在一起 ✓
+   *    所以开一个必须关另一个 ✓ 见下面两个 onClick ✓
+   */
+  const [pinnedOpen, setPinnedOpen] = useState(false)
+
+  /**
+   * 把 `onLoadPinned` 装进 ref ✓
+   *
+   * ⚠️ 不能直接把它写进下面那个 effect 的依赖数组 ✗
+   *    App 每次渲染都会传一个**新的函数实例** ✓
+   *    放进依赖里 effect 就会每次都跑 ✓ 而它里面又会 setState ✓
+   *    → **无限循环** ✓
+   *    用 ref 就没有这个问题：effect 只认 `pinnedOpen` 和 `pinnedTick` ✓
+   */
+  const loadPinnedRef = useRef(onLoadPinned)
+  loadPinnedRef.current = onLoadPinned
+
+  useEffect(() => {
+    // 打开时拉一次 ✓ 开着的时候别人改了置顶也重拉 ✓ 关着就什么都不做 ✓
+    if (pinnedOpen) loadPinnedRef.current?.()
+  }, [pinnedOpen, pinnedTick])
 
   /**
    * 消息的右键菜单。只有能删的人（管理员以上）才可能被打开 ——
@@ -334,16 +447,21 @@ export function ChatPanel({
   /**
    * 右键一条消息。
    *
-   * 不能删的人**直接不拦事件** —— 让浏览器该干嘛干嘛（选中文字之类），
-   * 而不是弹一个只有"取消"的菜单。
+   * ⚠️ 这里的早退条件改过 ✗
+   *    原来写的是「不能删的人直接不拦」✓ 因为菜单里**只有删除** ✓
+   *    现在菜单里加了「回复」✓ 而**所有人都该能回复** ✓
+   *    继续用 `!onDeleteMessage` 早退的话，普通成员右键**什么都不会弹** ✗
+   *    所以改成"两个能力都没有才早退" ✓
    */
   const openMsgMenu = (e: React.MouseEvent, id: number) => {
-    if (!onDeleteMessage) return
+    if (!onDeleteMessage && !onReply && !onReact && !onPin) return
     e.preventDefault()
     e.stopPropagation()
     setMsgMenu({
       x: Math.max(4, Math.min(e.clientX, window.innerWidth - 160 - 8)),
-      y: Math.max(4, Math.min(e.clientY, window.innerHeight - 60 - 8)),
+      // 菜单高度按**四项**算 ✓ 每项约 38px ✓ 留点余量 ✓
+      // ⚠️ 每加一项都要跟着改这个数 ✗ 不改的话贴底部的消息菜单会超出屏幕 ✓
+      y: Math.max(4, Math.min(e.clientY, window.innerHeight - 160 - 8)),
       id,
     })
   }
@@ -459,9 +577,12 @@ export function ChatPanel({
 
   const submit = () => {
     if (!canSend) return
-    onSend(draft.trim(), pending)
+    // 把正在回复的那条一起带上 ✓ 服务端会校验它确实属于这个频道 ✗
+    onSend(draft.trim(), pending, replyTo?.id ?? null)
     setDraft('')
     setPending(null)
+    // 发完就退出回复态 ✓ 不然下一条也会跟着引用（很容易没注意到 ✗）
+    onCancelReply?.()
   }
 
   const pickFile = async (file: File | undefined) => {
@@ -489,7 +610,7 @@ export function ChatPanel({
   const takeScreenshot = async () => {
     const api = window.desktop
     if (!api?.captureRegion) {
-      setUploadError('截图功能不可用（桌面接口没加载）')
+      setUploadError(t('chat.screenshotUnavailable'))
       return
     }
 
@@ -505,7 +626,7 @@ export function ChatPanel({
       const stamp = new Date()
         .toLocaleString('zh-CN', { hour12: false })
         .replace(/[^\d]/g, '')
-      const file = new File([blob], `截图-${stamp}.png`, { type: 'image/png' })
+      const file = new File([blob], t('chat.screenshotName', { stamp }), { type: 'image/png' })
 
       setPending(await onUpload(file))
     } catch (err) {
@@ -525,38 +646,125 @@ export function ChatPanel({
           <>
             <span className="channel-hash">@</span>
             <strong>{dmPeer.name}</strong>
-            <span className="muted small">私聊</span>
+            <span className="muted small">{t('chat.dmTag')}</span>
             <div className="spacer" />
             <button
               className="ghost small-btn"
               onClick={onCloseDm}
-              title="关闭私聊，回到频道"
+              title={t('chat.closeDm')}
             >
-              ✕ 关闭
+              ✕ {t('chat.close')}
             </button>
           </>
         ) : (
           <>
-            <span className="channel-hash">#</span>
-            <strong>{channelName || '未选择频道'}</strong>
+            <span className="channel-hash">
+              <HashIcon size={16} />
+            </span>
+            <strong>{channelName || t('chat.noChannel')}</strong>
           </>
         )}
 
         {!dmPeer && <div className="spacer" />}
+
+        {/* 置顶入口。放在放大镜**左边** ✓
+            搜索和置顶是同一类"对当前会话的操作" ✓ 所以并排放在最右 ✓
+            而图钉在左、放大镜在右 —— 这是明确要求的位置 ✓ */}
+        {!dmPeer && (
+          <button
+            className={`ghost small-btn ${pinnedOpen ? 'active' : ''}`}
+            onClick={() => {
+              // 和搜索栏互斥 ✗ 同时开会挤在一起 ✓
+              setSearchOpen(false)
+              // 拉列表交给上面那个 effect ✓ 它盯着 pinnedOpen ✓
+              setPinnedOpen((v) => !v)
+            }}
+            disabled={!channelName}
+            title={t('chat.pinnedHeader') + (pinned.length ? t('chat.pinBadge', { n: pinned.length }) : '')}
+          >
+            <PinIcon />
+          </button>
+        )}
 
         {/* 搜索入口放在**最右边** —— 标题栏左边是身份信息，
             操作类的东西统一靠右，和别的界面一致 */}
         {!dmPeer && (
           <button
             className={`ghost small-btn ${searchOpen ? 'active' : ''}`}
-            onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))}
+            onClick={() => {
+              // 同上，和置顶面板互斥 ✗
+              setPinnedOpen(false)
+              if (searchOpen) closeSearch()
+              else setSearchOpen(true)
+            }}
             disabled={!channelName}
-            title="搜索聊天记录（关键词，或只看某个人说的）"
+            title={t('chat.searchTitle')}
           >
             <SearchIcon />
           </button>
         )}
       </div>
+
+      {/* ── 置顶消息面板 ───────────────────────────────
+          ⚠️ 列表**必须从服务端拉** ✗ 不能在已加载的消息里筛 ✓
+             置顶的往往是很久以前那条重要消息 ✓
+             而客户端只有最近 50 条 ✓ 本地筛会显示成空的 ✗ */}
+      {pinnedOpen && (
+        <div className="chat-pinned">
+          <div className="chat-pinned-head">
+            <PinIcon size={14} />
+            <span>{t('chat.pinnedHeader')}</span>
+            {pinned.length > 0 && <span className="muted small">{pinned.length} / 50</span>}
+            <div className="spacer" />
+            <button
+              className="ghost small-btn"
+              onClick={() => setPinnedOpen(false)}
+              title={t('chat.collapse')}
+            >
+              ✕
+            </button>
+          </div>
+
+          {pinned.length === 0 ? (
+            <div className="chat-pinned-empty">
+              {t('chat.noPins')}
+            </div>
+          ) : (
+            <div className="chat-pinned-list">
+              {pinned.map((m) => (
+                <div className="pinned-item" key={m.id}>
+                  <div className="pinned-meta">
+                    <strong>{m.author_name}</strong>
+                    <span className="chat-time">
+                      {formatStamp(m.pinned_at ?? m.created_at, t, lang)}
+                    </span>
+                    {m.pinned_by && (
+                      <span className="muted small">{t('chat.pinnedBy', { name: m.pinned_by })}</span>
+                    )}
+                  </div>
+                  {/* 引用块也一并显示 ✓ 不然置顶列表里的消息和聊天里长得不一样 ✗ */}
+                  {m.reply_preview && (
+                    <div className="chat-quote">
+                      <span className="chat-quote-author">{m.reply_preview.author_name}</span>
+                      <span className="chat-quote-text">{m.reply_preview.body}</span>
+                    </div>
+                  )}
+                  <div className="pinned-body">{m.body || t('chat.attachment')}</div>
+                  {onPin && (
+                    <button
+                      className="ghost small-btn pinned-unpin"
+                      onClick={() => onPin(m.id)}
+                      title={t('chat.unpin')}
+                    >
+                      {t('chat.unpin')}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── 搜索栏 ─────────────────────────────────────
           关键词和"只看某人"可以一起用：两个都填就是
@@ -566,7 +774,7 @@ export function ChatPanel({
           <input
             autoFocus
             value={searchQ}
-            placeholder="搜关键词…"
+            placeholder={t('chat.searchPlaceholder')}
             onChange={(e) => setSearchQ(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') void runSearch()
@@ -576,9 +784,9 @@ export function ChatPanel({
           <select
             value={searchAuthor}
             onChange={(e) => setSearchAuthor(e.target.value)}
-            title="只看某个人的发言"
+            title={t('chat.filterByAuthor')}
           >
-            <option value="">所有人</option>
+            <option value="">{t('chat.everyone')}</option>
             {searchAuthors.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name}
@@ -586,9 +794,9 @@ export function ChatPanel({
             ))}
           </select>
           <button className="small-btn" onClick={() => void runSearch()} disabled={searchBusy}>
-            {searchBusy ? '搜索中…' : '搜索'}
+            {searchBusy ? t('chat.searching') : t('chat.searchAction')}
           </button>
-          <button className="ghost small-btn" onClick={closeSearch} title="退出搜索（Esc）">
+          <button className="ghost small-btn" onClick={closeSearch} title={t('chat.exitSearch')}>
             ✕
           </button>
         </div>
@@ -596,9 +804,9 @@ export function ChatPanel({
 
       {searching && (
         <div className="chat-search-hint">
-          搜索结果 {messages.length} 条
+          {t('chat.searchResults', { n: messages.length })}
           <button className="ghost tiny" onClick={closeSearch}>
-            返回聊天
+            {t('chat.backToChat')}
           </button>
         </div>
       )}
@@ -612,10 +820,10 @@ export function ChatPanel({
           {messages.length === 0 && (
             <p className="muted" style={{ padding: 16 }}>
               {searching
-                ? '没有匹配的消息。换个词试试，或者点右上角的 ✕ 退出搜索。'
+                ? t('chat.noMatch')
                 : dmPeer
-                  ? `还没有和 ${dmPeer.name} 的聊天记录。说点什么吧。`
-                  : '还没有消息。说点什么吧。'}
+                  ? t('chat.noDmHistory', { name: dmPeer.name })
+                  : t('chat.noMessages')}
             </p>
           )}
 
@@ -637,8 +845,8 @@ export function ChatPanel({
               >
                 <div className="chat-meta">
                   <span className="chat-author">{block.authorName}</span>
-                  <span className="chat-time" title={fullStamp(block.createdAt)}>
-                    {formatStamp(block.createdAt)}
+                  <span className="chat-time" title={fullStamp(block.createdAt, lang)}>
+                    {formatStamp(block.createdAt, t, lang)}
                   </span>
                 </div>
 
@@ -650,8 +858,30 @@ export function ChatPanel({
                        点的哪条删哪条 ✓ 不能删的人这里直接不拦（见 openMsgMenu） */
                     onContextMenu={(e) => openMsgMenu(e, m.id)}
                   >
+                    {/* ⚠️ 引用块必须在**气泡内部** ✗（这是明确要求 ✓）
+                        而且底色要比气泡**更深** ✓ —— 见 styles.css 里 .chat-quote 的说明
+                        靠左那道竖线表示"这是一段被引用的话" ✓ 和正文区分开 ✓ */}
+                    {m.reply_to != null && (
+                      <div className="chat-quote" title={t('chat.quotedMessage')}>
+                        {m.reply_preview ? (
+                          <>
+                            <span className="chat-quote-author">
+                              {m.reply_preview.author_name}
+                            </span>
+                            <span className="chat-quote-text">{m.reply_preview.body}</span>
+                          </>
+                        ) : (
+                          /* reply_to 有值、摘要却是 null ✗ 两种可能：
+                             原消息**被删了** ✓ 或者它**不属于这个频道**（服务端拒绝回填）✓
+                             两种情况都显示同一句 ✓ 不区分 —— 区分了就等于告诉别人
+                             "那个 id 上曾经有条消息" ✓ 那正是要避免泄露的 ✓ */
+                          <span className="chat-quote-gone">{t('chat.originalGone')}</span>
+                        )}
+                      </div>
+                    )}
+
                     {/* 允许"只有附件没有文字"的消息 */}
-                    {m.body && <div className="chat-body">{renderBody(m.body, onOpenLink)}</div>}
+                    {m.body && <div className="chat-body">{renderBody(m.body, onOpenLink, t)}</div>}
 
                     {m.attachment && (
                       <Attachment
@@ -668,6 +898,60 @@ export function ChatPanel({
                         }
                       />
                     )}
+
+                    {/* emoji 表态。放在消息内容**下面** ✓ 和正文分开 ✓
+                        ⚠️ `m.reactions` 可能是 undefined ✗
+                           服务端是后加的这个字段 ✓ 老消息、以及还没重新拉过的
+                           历史消息都没有它 ✓ 直接 .length 会炸 ✓
+                        ⚠️ "我点过没有"是**客户端算的** ✗
+                           服务端只给 `users`（带 id 和名字 ✓）
+                           因为同一条广播发给所有人 ✓ 它算不出一个对所有人都对的 mine ✓ */}
+                    {(m.pinned_at != null || (m.reactions ?? []).length > 0) && (
+                      <div className="chat-reactions">
+                        {/* 「已置顶」标记。
+                            ⚠️ 放在**这一行**而不是消息头 ✗
+                               因为消息头（.chat-meta）是**按消息块**渲染的 ✓
+                               一个块里可能有好几条消息 ✓ 挂在头上会让人
+                               以为整块都置顶了 ✓
+                               这一行是**逐条**的 ✓ 位置才对 ✓ */}
+                        {m.pinned_at != null && (
+                          <span
+                            className="pinned-mark"
+                            title={m.pinned_by ? t('chat.pinnedBy', { name: m.pinned_by }) : t('chat.pinned')}
+                          >
+                            <PinIcon size={12} />
+                            <span>{t('chat.pinned')}</span>
+                          </span>
+                        )}
+                        {(m.reactions ?? []).map((r) => {
+                          const mine = r.users.some((u) => u.id === myUserId)
+                          return (
+                            <button
+                              key={r.emoji}
+                              className={`reaction-chip${mine ? ' mine' : ''}`}
+                              title={r.users.map((u) => u.name).join('、')}
+                              disabled={!connected || !onReact}
+                              onClick={() => onReact?.(m.id, r.emoji)}
+                            >
+                              <span className="reaction-emoji">{r.emoji}</span>
+                              <span className="reaction-count">{r.users.length}</span>
+                            </button>
+                          )
+                        })}
+                        {onReact && (
+                          <button
+                            className="reaction-chip add"
+                            title={t('chat.addReaction')}
+                            onClick={() => {
+                              setEmojiOpen(false)
+                              setReactFor(m.id)
+                            }}
+                          >
+                            ＋
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -675,6 +959,39 @@ export function ChatPanel({
           ))}
         </div>
       </div>
+
+      {/* 表态提示条。和回复提示条**共用一套样式** ✓
+          两者不同时出现 ✓ 而且视觉上都是"我现在要对某条消息做点什么" ✓
+          语义一样就没必要再写一套 CSS ✗ */}
+      {reactFor != null && (
+        <div className="reply-banner">
+          <span className="reply-banner-label">{t('chat.reactionLabel')}</span>
+          <span className="reply-banner-name">
+            {messages.find((m) => m.id === reactFor)?.author_name ?? ''}
+          </span>
+          <span className="reply-banner-text">
+            {messages.find((m) => m.id === reactFor)?.body || t('chat.attachment')}
+          </span>
+          <button className="reply-banner-x" onClick={() => setReactFor(null)} title={t('chat.cancel')}>
+            ×
+          </button>
+        </div>
+      )}
+
+      {/* 回复提示条，贴在输入框正上方 ✓
+          ⚠️ 必须一眼看出"我现在处于回复态" ✗
+             不然发出去才发现在引用别人的话 ✓ 很尴尬 ✓
+             而且它会在发完 / 点 × 之后消失 ✓ 不会粘住下一条 ✓ */}
+      {replyTo && (
+        <div className="reply-banner">
+          <span className="reply-banner-label">{t('chat.replyLabel')}</span>
+          <span className="reply-banner-name">{replyTo.author_name}</span>
+          <span className="reply-banner-text">{replyTo.body || t('chat.attachment')}</span>
+          <button className="reply-banner-x" onClick={onCancelReply} title={t('chat.cancelReply')}>
+            ×
+          </button>
+        </div>
+      )}
 
       <div className="chat-input-area">
         <input
@@ -697,7 +1014,7 @@ export function ChatPanel({
             </span>
             <span className="muted small">{formatBytes(pending.size)}</span>
             <div className="spacer" />
-            <button className="ghost tiny" onClick={() => setPending(null)} title="移除附件">
+            <button className="ghost tiny" onClick={() => setPending(null)} title={t('chat.removeAttachment')}>
               ×
             </button>
           </div>
@@ -721,11 +1038,11 @@ export function ChatPanel({
             placeholder={
               connected
                 ? pending
-                  ? '加一句说明（可留空直接发）'
+                  ? t('chat.captionPlaceholder')
                   : dmPeer
-                    ? `发消息给 ${dmPeer.name}`
-                    : `发消息到 #${channelName}`
-                : '未连接到服务端'
+                    ? t('chat.sendToDm', { name: dmPeer.name })
+                    : t('chat.sendToChannel', { name: channelName })
+                : t('chat.notConnected')
             }
             disabled={!connected}
             onChange={(e) => {
@@ -748,22 +1065,43 @@ export function ChatPanel({
                 忙碌状态不改图标，只加个脉冲动画 —— 换字形又会破坏对齐。 */}
             <div className="emoji-wrap">
               <button
-                className={`ghost icon-btn ${emojiOpen ? 'active' : ''}`}
+                className={`ghost icon-btn ${emojiOpen || reactFor != null ? 'active' : ''}`}
                 disabled={!connected}
-                title="表情"
-                onClick={() => setEmojiOpen((v) => !v)}
+                title={reactFor != null ? t('chat.pickReactionEmoji') : t('chat.emoji')}
+                onClick={() => {
+                  // 表态模式开着的时候，这个按钮变成"取消" ✗
+                  // 不然点它会再弹一个选择器、和正开着的那个叠在一起 ✓
+                  if (reactFor != null) {
+                    setReactFor(null)
+                    return
+                  }
+                  setEmojiOpen((v) => !v)
+                }}
               >
                 <SmileIcon />
               </button>
               {emojiOpen && (
                 <EmojiPicker onPick={insertEmoji} onClose={() => setEmojiOpen(false)} />
               )}
+              {/* 表态选择器。**故意复用同一个容器** ✗
+                  定位是现成的 ✓ 再放一个地方就得重新调一遍偏移 ✓
+                  代价是两者必须互斥 ✓ 见 reactFor 的说明 */}
+              {reactFor != null && (
+                <EmojiPicker
+                  onPick={(e) => {
+                    const id = reactFor
+                    setReactFor(null)
+                    onReact?.(id, e)
+                  }}
+                  onClose={() => setReactFor(null)}
+                />
+              )}
             </div>
 
             <button
               className={`ghost icon-btn ${shooting ? 'busy' : ''}`}
               disabled={!connected || shooting}
-              title="截图（框选区域后自动作为附件，同时复制到剪贴板）"
+              title={t('chat.screenshotTip')}
               onClick={() => void takeScreenshot()}
             >
               <CameraIcon />
@@ -772,14 +1110,14 @@ export function ChatPanel({
             <button
               className={`ghost icon-btn ${uploading ? 'busy' : ''}`}
               disabled={!connected || uploading}
-              title="发送图片或文件"
+              title={t('chat.attachTip')}
               onClick={() => fileInputRef.current?.click()}
             >
               <PaperclipIcon />
             </button>
 
             <button className="composer-send" onClick={submit} disabled={!canSend}>
-              发送
+              {t('chat.send')}
             </button>
           </div>
         </div>
@@ -798,16 +1136,65 @@ export function ChatPanel({
           style={{ left: msgMenu.x, top: msgMenu.y }}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <button
-            className="context-menu-item danger"
-            onClick={() => {
-              const { id } = msgMenu
-              setMsgMenu(null)
-              onDeleteMessage?.(id)
-            }}
-          >
-            删除消息
-          </button>
+          {/* 「回复」在前、「删除」在后 ✓
+              删除是危险操作 ✓ 放最后、还带红色 ✓ 免得手滑点到 ✓
+              而且回复**所有人都能点** ✓ 删除只有能删的人才渲染出来 ✓ */}
+          {onReply && (
+            <button
+              className="context-menu-item"
+              onClick={() => {
+                const { id } = msgMenu
+                setMsgMenu(null)
+                const target = messages.find((m) => m.id === id)
+                if (target) onReply(target)
+              }}
+            >
+              {t('chat.reply')}
+            </button>
+          )}
+          {onReact && (
+            <button
+              className="context-menu-item"
+              onClick={() => {
+                const { id } = msgMenu
+                setMsgMenu(null)
+                // 开表态选择器前先把写消息那个关掉 ✗ 两个会叠在一起 ✓
+                setEmojiOpen(false)
+                setReactFor(id)
+              }}
+            >
+              {t('chat.addReactionMenu')}
+            </button>
+          )}
+          {onPin && (
+            <button
+              className="context-menu-item"
+              onClick={() => {
+                const { id } = msgMenu
+                setMsgMenu(null)
+                onPin(id)
+              }}
+            >
+              {/* 标签跟着**当前状态**走 ✓
+                  已经是置顶的就显示"取消置顶" ✓
+                  不然用户点之前根本不知道会发生什么 ✗ */}
+              {messages.find((m) => m.id === msgMenu.id)?.pinned_at
+                ? t('chat.unpin')
+                : t('chat.pin')}
+            </button>
+          )}
+          {onDeleteMessage && (
+            <button
+              className="context-menu-item danger"
+              onClick={() => {
+                const { id } = msgMenu
+                setMsgMenu(null)
+                onDeleteMessage(id)
+              }}
+            >
+              {t('chat.deleteMessage')}
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -834,20 +1221,22 @@ function Attachment({
 }) {
   // 文件被删掉之后，老消息里还留着引用 —— 别显示成一个破图标
   const [broken, setBroken] = useState(false)
+  /** ⚠️ 子组件要**自己取一次** t ✗ 它不在主组件的作用域里 ✓ */
+  const t = useT()
 
   if (isImageMime(file.mime)) {
     if (broken) {
-      return <p className="muted small">🖼 {file.name}（已被删除）</p>
+      return <p className="muted small">🖼 {t('chat.fileGone', { name: file.name })}</p>
     }
     return (
-      <button className="chat-image" onClick={onView} title="点击在应用内查看大图">
+      <button className="chat-image" onClick={onView} title={t('chat.viewLarge')}>
         <img src={href} alt={file.name} loading="lazy" onError={() => setBroken(true)} />
       </button>
     )
   }
 
   return (
-    <button className="chat-file" onClick={onOpen} title="点击下载">
+    <button className="chat-file" onClick={onOpen} title={t('chat.downloadTip')}>
       <span className="chat-file-icon">📄</span>
       <span className="chat-file-text">
         <span className="chat-file-name" title={file.name}>
@@ -855,7 +1244,7 @@ function Attachment({
         </span>
         <span className="muted small">{formatBytes(file.size)}</span>
       </span>
-      <span className="chat-file-action">下载</span>
+      <span className="chat-file-action">{t('chat.download')}</span>
     </button>
   )
 }

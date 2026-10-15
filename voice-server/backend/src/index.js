@@ -13,6 +13,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   openDb,
@@ -44,6 +45,12 @@ import {
   listDmsFor,
   isDmMember,
   dmMembers,
+  attachReplyPreviews,
+  reactionsForMessages,
+  toggleReaction,
+  setPinned,
+  listPinned,
+  PIN_LIMIT,
 } from './db.js';
 import { createAccessToken, createRoomService } from './livekit.js';
 import { createLeaveWatcher } from './voice-chime.js';
@@ -254,6 +261,36 @@ app.get('/api/channels/:id/messages', async (req, reply) => {
   }
 
   return { messages: listMessages(db, { channelId: id, before, limit }) };
+});
+
+/**
+ * 某个频道里被置顶的消息。
+ *
+ * ⚠️ 鉴权和历史接口**完全一样** ✗
+ *    不挡的话，任何人只要拿到一条私聊的 id 就能读到它的置顶 ✓
+ *    而置顶的往往正是"最重要、最不想外传"的那几条 ✗
+ *    后果比读历史还严重 ✓
+ *
+ *    （私聊 id 是 `dm-<idA>-<idB>` ✓ userId 是 UUID 所以猜不到 ✓
+ *      但"猜不到"不是安全措施 ✓ 该挡还是得挡 ✓ —— 和历史接口同一个理由 ✓）
+ */
+app.get('/api/channels/:id/pinned', async (req, reply) => {
+  const id = String(req.params.id ?? '');
+
+  const channel = getChannel(db, id);
+  if (!channel) {
+    return reply.code(404).send({ error: 'channel_not_found' });
+  }
+
+  if (channel.kind === 'dm') {
+    const auth = authenticate(req);
+    if (auth.error) return reply.code(401).send({ error: auth.error });
+    if (!isDmMember(db, id, auth.member.user_id)) {
+      return reply.code(403).send({ error: 'forbidden' });
+    }
+  }
+
+  return { messages: listPinned(db, id), limit: PIN_LIMIT };
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -774,6 +811,110 @@ setInterval(() => {
   void refreshVoiceRooms();
 }, 3000).unref?.();
 
+// ─────────────────────────────────────────────────────────────
+// P2P 连通性诊断
+//
+// 为什么要它 ✗
+//   投屏现在全走 SFU，而服务器出口只有 6 Mbps —— 4 Mbps 一档只够一个人看。
+//   想改成 P2P 直连可以完全绕开服务器带宽，但"能不能直连"取决于
+//   双方的 NAT 类型、有没有 IPv6、同不同运营商 ——
+//   这些**只有在真实网络里量过**才知道 ✓ 所以先做一个诊断页。
+//
+// 它回答四个问题 ✓
+//   ① 本机：公网地址 / UDP 出站 / **NAT 映射行为**（锥型 or 对称型）
+//   ② STUN：国内到底哪些服务器可达（逐个实测，不照抄网上的列表）
+//   ③ 直连：两人之间能不能打通、用了几秒、走的是哪一类候选对
+//   ④ 吞吐：打通之后**实际**能跑多少 Mbps
+//           —— 能连 ≠ 能扛 4 Mbps 投屏 ✗ 这一项才是决定性判据
+//
+// ⚠️ 这一整块是**纯新增** ✗
+//    · 独立的 /p2p-check 页面路由 ✓
+//    · 独立的 /p2p-signal 信令通道 ✓ 不进成员表、不占在线数、不写库 ✓
+//    · 现有 /ws 那条链路一个字节都没改 ✓
+//
+// ⚠️ 为什么页面放在 backend/src 而不是 tools ✗
+//   deploy.ps1 是按目录自动列文件上传的 ✓ 放在 tools 里就传不上去 ✓
+//   （所以这次也把 .html 加进了它的扩展名清单 ✓）
+// ─────────────────────────────────────────────────────────────
+const P2P_PAGE = join(dirname(fileURLToPath(import.meta.url)), 'p2p-check.html');
+
+app.get('/p2p-check', async (req, reply) => {
+  if (!existsSync(P2P_PAGE)) return reply.code(404).send({ error: 'not_found' });
+  reply.header('Content-Type', 'text/html; charset=utf-8');
+  reply.header('Cache-Control', 'no-store');
+  return reply.send(createReadStream(P2P_PAGE));
+});
+
+// 房间式中继：同一个 room 里的连接之间互相转发任意 JSON ✓
+//
+// ⚠️ 它不是"公开的信令服务" ✗ 必须带对邀请码才让连 ✓
+//    否则等于把服务器做成免费的打洞中继 ✓
+//
+// 只转发、不解析内容 ✓ 也不做身份 ✓ 因为诊断阶段还没有身份概念 ✓
+const p2pRooms = new Map(); // room -> Set<socket>
+
+app.get('/p2p-signal', { websocket: true }, (conn, req) => {
+  const socket = typeof conn?.send === 'function' ? conn : conn?.socket;
+  if (!socket) return;
+
+  const room = String(req.query?.room ?? '').slice(0, 64);
+  const code = String(req.query?.code ?? '');
+
+  const fail = (why) => {
+    // ⚠️ 必须**等 send 真正发出去**再 close ✗
+    //    写成 send() 紧接 close() 的话 ✓ close 可能先把连接拆掉 ✓
+    //    那条错误消息就永远到不了客户端 ✓
+    //    现象是"点一下就断开" ✓ 而真实原因（邀请码不对 / 房间满了）看不到 ✗
+    try {
+      socket.send(JSON.stringify({ t: 'err', msg: why }), () => {
+        try { socket.close(); } catch { /* ignore */ }
+      });
+    } catch {
+      try { socket.close(); } catch { /* ignore */ }
+    }
+  };
+
+  if (!room) return fail('no_room');
+  if (!safeEqual(code, config.inviteCode)) return fail('bad_code');
+
+  let set = p2pRooms.get(room);
+  if (!set) {
+    set = new Set();
+    p2pRooms.set(room, set);
+  }
+  // 诊断只需要两个人；留 4 个位置便于对比多个网络
+  if (set.size >= 4) return fail('room_full');
+  set.add(socket);
+
+  // 按**加入顺序**发一个下标 ✓ 页面用它决定谁是主叫 ✓
+  // 不这么做的话两边可能同时发 offer（glare）✓ 连不上还很难查 ✗
+  const announce = () => {
+    const arr = [...set];
+    arr.forEach((s, idx) => {
+      if (s.readyState !== 1) return;
+      s.send(JSON.stringify({ t: 'peers', n: arr.length, idx }));
+    });
+  };
+  announce();
+
+  const others = () => [...set].filter((s) => s !== socket && s.readyState === 1);
+
+  socket.on('message', (raw) => {
+    const text = raw.toString();
+    // 信令只有几 KB ✓ 出现大包说明用错了通道 ✓
+    if (text.length > 128 * 1024) return;
+    for (const s of others()) s.send(text);
+  });
+
+  const leave = () => {
+    if (!set.delete(socket)) return;
+    if (set.size === 0) p2pRooms.delete(room);
+    else announce();
+  };
+  socket.on('close', leave);
+  socket.on('error', leave);
+});
+
 app.get('/ws', { websocket: true }, (conn, req) => {
   // @fastify/websocket v11 直接给 WebSocket；v8 及更早要给 conn.socket。
   // 两种都兼容一下，免得锁版本。
@@ -978,13 +1119,39 @@ app.get('/ws', { websocket: true }, (conn, req) => {
         return deny('forbidden');
       }
 
+      // ── 回复：校验被引用的那条消息 ✗ ────────────────────────
+      //
+      // ⚠️⚠️ 这里**必须**校验"被引用的消息属于同一条频道" ✓
+      //    不校验的话这是一条真实的**信息泄露路径** ✗：
+      //      任何人在**公开频道**里发一条 replyTo = 某条私聊消息的 id ✓
+      //      服务端把摘要一填 ✓ 私聊内容就出现在公开频道里了 ✓
+      //
+      //    校验不过时**不报错、只是忽略这个 replyTo** ✓
+      //    （报错的话客户端还得处理一种新错误 ✓ 而且用户也没法自愈 ✓
+      //      直接当成普通消息发出去更简单，也不会泄露任何东西 ✓）
+      let replyTo = null;
+      if (msg.replyTo != null) {
+        const n = Number(msg.replyTo);
+        if (Number.isFinite(n)) {
+          const quoted = getMessage(db, n);
+          if (quoted && quoted.channel_id === channelId) replyTo = n;
+        }
+      }
+
       const row = insertMessage(db, {
         channelId,
         authorId: myUserId,
         authorName: actor?.name ?? '匿名',
         body,
         attachment,
+        replyTo,
       });
+
+      // 把被引用消息的摘要一起带上 ✓ 客户端才知道引用块里显示什么 ✓
+      attachReplyPreviews(db, [row]);
+      // 新消息的表态列表是空的 ✓ 但也得有这个字段 ——
+      // 不然客户端拿到两种形状的消息（有 reactions / 没有）✓ 处处要判空 ✓
+      reactionsForMessages(db, [row]);
 
       if (isDm) {
         // ⚠️ 私聊**绝不能**用全体广播 —— 只发给会话里的两个人。
@@ -993,6 +1160,115 @@ app.get('/ws', { websocket: true }, (conn, req) => {
         broadcast({ type: 'message', message: row }, (userId) => members.has(userId));
       } else {
         broadcast({ type: 'message', message: row });
+      }
+      return;
+    }
+
+    // ── 消息表态（emoji reaction）──────────────────────────────
+    //
+    // 同一个 emoji 再点一次就取消 ✓
+    // 库里主键是「消息 + 人 + 表情」✓ 所以这件事天然幂等 ✓ 不用查状态 ✓
+    //
+    // ⚠️⚠️ **频道的可见性必须校验** ✗
+    //    不校验的话这是**第二条**真实的信息泄露路径 ✓（第一条是 replyTo ✓）
+    //      任何人拿一条**私聊**消息的 id 发一条 react ✓
+    //      服务端照常广播 ✓ 那条私聊的表态就出现在……不 ✓ 广播要是不筛人 ✓
+    //      它会**发给所有人** ✓ 而表态里带着**参与者昵称** ✓
+    //      于是公开频道的每个人都能看到"某条你不认识的消息上有谁谁谁" ✗
+    //    （比 replyTo 那条泄露得少 ✓ 但同样是泄露 ✓ 而且是同一种疏忽 ✓）
+    //
+    //    所以这里的判法和发消息**完全一致**：私聊必须是会话成员 ✓
+    if (msg.type === 'react') {
+      const messageId = Number(msg.messageId);
+      // emoji 可能由多个码位组成（肤色、组合序列、旗帜 ✓）✓ 给足余量但不设成无限 ✓
+      const emoji = typeof msg.emoji === 'string' ? msg.emoji.slice(0, 16) : '';
+      if (!Number.isFinite(messageId) || !emoji) return;
+
+      const target = getMessage(db, messageId);
+      // 消息已经被删了 ✓ 静默忽略 —— 两个人在同时操作时很常见 ✓ 不是错误 ✓
+      if (!target) return;
+
+      const targetCh = getChannel(db, target.channel_id);
+      if (!targetCh) return;
+
+      const targetIsDm = targetCh.kind === 'dm';
+      if (targetIsDm && !isDmMember(db, target.channel_id, myUserId)) return deny('forbidden');
+
+      toggleReaction(db, {
+        messageId,
+        userId: myUserId,
+        userName: actor?.name ?? '匿名',
+        emoji,
+      });
+
+      // ⚠️ 重新读一遍再广播 ✓ 不要手工"上一个状态 ±1" ✗
+      //    两个人同时点的时候，手工算出来的计数很容易和库里对不上 ✓
+      //    而界面上的数字一旦错一次，就得等下一次刷新才修得回来 ✗
+      //    重读一次最省心，消息量这么小也完全不慢 ✓
+      const one = getMessage(db, messageId);
+      reactionsForMessages(db, [one]);
+
+      const payload = {
+        type: 'reactions',
+        channelId: target.channel_id,
+        messageId,
+        reactions: one.reactions,
+      };
+      if (targetIsDm) {
+        // 和发私聊消息同一条规矩：只发给会话里的两个人 ✗
+        const members = new Set(dmMembers(db, target.channel_id));
+        broadcast(payload, (userId) => members.has(userId));
+      } else {
+        broadcast(payload);
+      }
+      return;
+    }
+
+    // ── 消息置顶 / 取消置顶 ────────────────────────────────────
+    //
+    // 同一条再来一次就是取消 ✓（和表态一样 ✓ 客户端不用先查状态 ✓）
+    //
+    // ⚠️ 频道可见性校验：这是**第三条**要用到它的地方 ✗
+    //    （前两条是 replyTo 和 react ✓）
+    //    这次泄露的东西最重 ✗ —— 置顶的往往正是"最重要、最不想外传"的消息 ✓
+    //    置顶成功会广播 ✓ 而**置顶列表本身**还有个 HTTP 接口 ✓
+    //    那个接口也照抄了同一套鉴权 ✓ 见 /api/channels/:id/pinned ✓
+    //
+    // ⚠️ 广播里**只带 id 和置顶时间**，不带整条消息 ✗
+    //    客户端拿它去修补已加载的那条消息 ✓ 再顺手刷新置顶面板（如果开着 ✓）
+    //    带整条消息的话，那条消息可能根本没加载过 ✓ 客户端也不好往哪儿塞 ✓
+    //    真要完整内容，客户端会自己去拉置顶列表接口 ✓
+    if (msg.type === 'pin') {
+      const messageId = Number(msg.messageId);
+      if (!Number.isFinite(messageId)) return;
+
+      const target = getMessage(db, messageId);
+      // 消息已经被删了 ✓ 静默忽略 ✓（两个人同时操作时很常见 ✓）
+      if (!target) return;
+
+      const targetCh = getChannel(db, target.channel_id);
+      if (!targetCh) return;
+
+      const targetIsDm = targetCh.kind === 'dm';
+      if (targetIsDm && !isDmMember(db, target.channel_id, myUserId)) return deny('forbidden');
+
+      const result = setPinned(db, { messageId, byName: actor?.name ?? '匿名' });
+      if (!result) return;
+      // 到上限了 ✓ 这个**必须**告诉客户端 ✗
+      // 不然用户只会看到"点了没反应" ✓ 以为是坏了 ✓
+      if (result.full) return deny('pin_limit');
+
+      const payload = {
+        type: 'pinned',
+        channelId: target.channel_id,
+        messageId,
+        pinnedAt: result.pinned ? Date.now() : null,
+      };
+      if (targetIsDm) {
+        const members = new Set(dmMembers(db, target.channel_id));
+        broadcast(payload, (userId) => members.has(userId));
+      } else {
+        broadcast(payload);
       }
       return;
     }
@@ -1164,6 +1440,48 @@ app.get('/ws', { websocket: true }, (conn, req) => {
       return;
     }
 
+    // ── P2P 信令转发（投屏走直连时交换 SDP / ICE 候选）─────────
+    //
+    // 为什么需要它 ✗
+    //   投屏现在全走 SFU，一发多收**全过服务器出口** ✓
+    //   6 Mbps 的机器上 4 Mbps 一档只够一个人看 ✓
+    //   改成 P2P 直连之后画面不再经过服务器 ✓
+    //   服务器只帮忙交换**几百字节**的信令 ✓ 出口可以忽略 ✓
+    //
+    // 只转发、不解析、不落库 ✓ —— 服务器看不懂 SDP 也不需要看懂 ✓
+    //
+    // ⚠️ 安全边界（v1 的取舍，写清楚免得以后忘了）
+    //   这里只校验三件事：
+    //     · 发送方已经 hello 过（在下面的 joined 分支保证了）
+    //     · 目标**当前在线** ✓ 不在线就静默丢弃
+    //     · 载荷不超过 64 KB ✓
+    //
+    //   **没有**校验"两人必须在同一个语音房间" ✗
+    //   原因是那需要把 LiveKit 的 identity 映射回 userId ✓
+    //   而 identity 带随机后缀（见 createAccessToken / slugify）✓ 查不了 ✓
+    //
+    //   增量风险有限 ✓：能拿到对方 userId 的本来就是圈子里的人 ✓
+    //   而且 P2P 媒体走 DTLS-SRTP 端到端加密 ✓
+    //   伪造信令最多让对方连上一次 ✓ **拿不到任何内容** ✓
+    //   以后要收紧的话：给 token 的 identity 加个可逆前缀 ✓ 就能查房间归属了 ✓
+    if (msg.type === 'p2p') {
+      const to = typeof msg.to === 'string' ? msg.to : '';
+      if (!to || to === myUserId) return;
+
+      const target = online.get(to);
+      // 对方不在线是**常态**（刚掉线、还没连上）✓ 静默丢弃 ✓ 不报错 ✓
+      if (!target) return;
+
+      const text = JSON.stringify({ type: 'p2p', from: myUserId, payload: msg.payload ?? null });
+      // 信令只有几百字节 ✓ 超过这个数说明用错了通道 ✓
+      if (text.length > 64 * 1024) return;
+
+      for (const peerWs of target.sockets) {
+        if (peerWs.readyState === 1 /* OPEN */) peerWs.send(text);
+      }
+      return;
+    }
+
     // ── 移除成员（只有频道主）────────────────────────────────
     //
     // 放在服务端而不是"客户端藏着按钮"：藏按钮只是不给入口，
@@ -1212,13 +1530,36 @@ app.get('/ws', { websocket: true }, (conn, req) => {
       const kind = msg.kind === 'voice' ? 'voice' : 'text';
       if (!rawName) return deny('empty_name');
 
+      // ── 子频道：只允许**一层** ✗ ─────────────────────────
+      //
+      //   规则三条（缺一不可 ✓）：
+      //     ① 父频道必须存在 ✓
+      //     ② 父频道和自己必须**同类** ✗
+      //        语音频道下面挂一个文字子频道，语义会很绕 ✓
+      //        （用户明确选的是"只一层、同类"那个方案 ✓）
+      //     ③ 父频道自己**必须是顶层** ✗ —— 这条就是"只一层"本身 ✓
+      //
+      //   ⚠️ 第 ③ 条是唯一一处**必须**在服务端拦的地方 ✗
+      //      界面上可以只列出顶层频道当候选项 ✓
+      //      但那是"不给入口"✓ 不是权限控制 ✓
+      //      构造一条带深层 parentId 的请求照样能发过来 ✓
+      let parentId = null;
+      if (msg.parentId != null && String(msg.parentId) !== '') {
+        const pid = String(msg.parentId);
+        const parent = getChannel(db, pid);
+        if (!parent) return deny('parent_not_found');
+        if (parent.kind !== kind) return deny('parent_kind_mismatch');
+        if (parent.parent_id) return deny('nest_too_deep');
+        parentId = pid;
+      }
+
       // 频道 id 同时也是 LiveKit 的房间名，所以用「名字 slug + 短随机后缀」
       const id = `${slugify(rawName) || 'ch'}-${randomUUID().slice(0, 4)}`;
-      const channel = createChannel(db, { id, name: rawName, kind });
+      const channel = createChannel(db, { id, name: rawName, kind, parentId });
 
       broadcastChannels();
       broadcast({ type: 'ok', requestId: msg.requestId, channel });
-      req.log.info({ id, name: rawName, kind, by: myUserId }, '创建频道');
+      req.log.info({ id, name: rawName, kind, parentId, by: myUserId }, '创建频道');
       return;
     }
 
@@ -1233,11 +1574,19 @@ app.get('/ws', { websocket: true }, (conn, req) => {
       const target = getChannel(db, id);
       if (target?.kind === 'dm') return deny('forbidden');
 
-      if (!deleteChannel(db, id)) return deny('channel_not_found');
+      // ⚠️ 子频道会**一起删掉** ✗（用户选的就是这个 ✓）
+      //    但数量要回给客户端 ✓ —— 弹窗里必须写清楚会连坐几个 ✓
+      //    不能默默连坐 ✓ 那是最容易让人丢数据的方式 ✓
+      const result = deleteChannel(db, id);
+      if (!result.ok) return deny('channel_not_found');
 
       broadcastChannels();
-      broadcast({ type: 'ok', requestId: msg.requestId });
-      req.log.info({ id, by: myUserId }, '删除频道');
+      broadcast({
+        type: 'ok',
+        requestId: msg.requestId,
+        removedChildren: result.removedChildren,
+      });
+      req.log.info({ id, removedChildren: result.removedChildren, by: myUserId }, '删除频道');
       return;
     }
 

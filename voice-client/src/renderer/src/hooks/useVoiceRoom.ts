@@ -19,6 +19,7 @@ import {
 import { startScreenAudioTrack } from '../lib/screenAudio'
 import { voiceKey } from '../lib/names'
 import type { AppConfig } from '../lib/config'
+import { useT, type MsgKey } from '../lib/i18n'
 
 export type RoomStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'error'
 
@@ -66,26 +67,33 @@ function getActiveDevice(room: Room | null, kind: MediaDeviceKind): string {
  */
 const EXPECTED_DISCONNECT_MS = 3000
 
-const DISCONNECT_TEXT: Record<string, string> = {
-  UNKNOWN: '连接已断开',
+/**
+ * 断开原因 → 文案键 ✓
+ *
+ * ⚠️ 这张表和语言**无关** ✗ 所以能放模块级 ✓
+ *    以前这里直接写的是中文 ✓ 那样就没法翻译 ✓
+ *    （hook 里取文案用 useT() ✓ 见下面）
+ */
+const DISCONNECT_KEYS: Record<string, MsgKey> = {
+  UNKNOWN: 'voiceDrop.unknown',
   // 自己点的「离开频道」—— 别说得像出了故障
-  CLIENT_INITIATED: '连接已断开',
+  CLIENT_INITIATED: 'voiceDrop.unknown',
   // 同一个身份在两处登录：多半是另一台设备或另一个窗口抢了
-  DUPLICATE_IDENTITY: '这个身份在别处连上了，这里已被挤下线',
-  SERVER_SHUTDOWN: '服务器已关闭',
-  PARTICIPANT_REMOVED: '你被移出了频道',
-  ROOM_DELETED: '频道已被删除',
-  STATE_MISMATCH: '连接状态异常，已断开',
-  JOIN_FAILURE: '加入频道失败',
-  MIGRATION: '服务器正在迁移，连接已断开',
-  // 信令 WebSocket 意外断掉 —— 最常见的"网络问题"就是它
-  SIGNAL_CLOSE: '网络错误',
-  ROOM_CLOSED: '频道已关闭',
-  USER_UNAVAILABLE: '对方暂时不可用',
-  USER_REJECTED: '对方拒绝了连接',
-  SIP_TRUNK_FAILURE: '语音中继失败',
-  CONNECTION_TIMEOUT: '网络错误（连接超时）',
-  MEDIA_FAILURE: '媒体传输出错',
+  DUPLICATE_IDENTITY: 'voiceDrop.duplicateIdentity',
+  SERVER_SHUTDOWN: 'voiceDrop.serverShutdown',
+  PARTICIPANT_REMOVED: 'voiceDrop.participantRemoved',
+  ROOM_DELETED: 'voiceDrop.roomDeleted',
+  STATE_MISMATCH: 'voiceDrop.stateMismatch',
+  JOIN_FAILURE: 'voiceDrop.joinFailure',
+  MIGRATION: 'voiceDrop.migration',
+  // 信令 WebSocket 意外断掉 —— 最常见的“网络问题”就是它
+  SIGNAL_CLOSE: 'voiceDrop.signalClose',
+  ROOM_CLOSED: 'voiceDrop.roomClosed',
+  USER_UNAVAILABLE: 'voiceDrop.userUnavailable',
+  USER_REJECTED: 'voiceDrop.userRejected',
+  SIP_TRUNK_FAILURE: 'voiceDrop.sipTrunkFailure',
+  CONNECTION_TIMEOUT: 'voiceDrop.connectionTimeout',
+  MEDIA_FAILURE: 'voiceDrop.mediaFailure',
 }
 
 /**
@@ -157,6 +165,14 @@ async function applyAttributes(room: Room, attrs: Record<string, string>): Promi
  * 手工维护一份镜像 state 极容易和实际状态不同步（这类 bug 很难查）。
  */
 export function useVoiceRoom() {
+  /**
+   * 界面文案 ✓
+   *
+   * ⚠️ 这是个 hook ✓ 所以能直接用 useT() ✗
+   *    和 `lib/api.ts` 不一样 —— 那边不是组件 ✓ 只能用 translate(loadLang()) ✓
+   */
+  const t = useT()
+
   const [room, setRoom] = useState<Room | null>(null)
   const [status, setStatus] = useState<RoomStatus>('idle')
   const [error, setError] = useState<string | null>(null)
@@ -230,7 +246,7 @@ export function useVoiceRoom() {
       // 主动退出 / 换频道之后紧接着来的 Disconnected 都算预期内的
       const expected = Date.now() - expectedDisconnectAtRef.current < EXPECTED_DISCONNECT_MS
       if (!expected) {
-        setError(DISCONNECT_TEXT[name] ?? '连接已断开')
+        setError(t(DISCONNECT_KEYS[name] ?? 'voiceDrop.unknown'))
       }
 
       bump()
@@ -361,7 +377,7 @@ export function useVoiceRoom() {
         try {
           await r.localParticipant.setMicrophoneEnabled(true, micOptsRef.current)
         } catch (err) {
-          setError(`已加入频道，但麦克风没打开：${(err as Error).message}`)
+          setError(t('voiceDrop.micFailed', { msg: (err as Error).message }))
         }
       } catch (err) {
         const msg = (err as Error)?.message ?? String(err)
@@ -426,7 +442,7 @@ export function useVoiceRoom() {
         await r.localParticipant.setMicrophoneEnabled(true, micOptsRef.current)
       }
     } catch (err) {
-      setError(`麦克风切换失败：${(err as Error).message}`)
+      setError(t('voiceDrop.switchFailed', { msg: (err as Error).message }))
     }
     bump()
   }, [bump, deafened])
@@ -451,7 +467,7 @@ export function useVoiceRoom() {
         await lp.setMicrophoneEnabled(false)
         await lp.setMicrophoneEnabled(true, micOptsRef.current)
       } catch (err) {
-        setError(`降噪设置没生效：${(err as Error).message}`)
+        setError(t('voiceDrop.noiseFailed', { msg: (err as Error).message }))
       }
       bump()
     },
@@ -516,7 +532,7 @@ export function useVoiceRoom() {
           externalAudio
         )
       } catch (err) {
-        setError(`屏幕共享失败：${(err as Error).message}`)
+        setError(t('voiceDrop.shareFailed', { msg: (err as Error).message }))
       }
       bump()
     },
@@ -552,7 +568,7 @@ export function useVoiceRoom() {
       try {
         await r.switchActiveDevice(kind, deviceId)
       } catch (err) {
-        setError(`切换设备失败：${(err as Error).message}`)
+        setError(t('voiceDrop.deviceFailed', { msg: (err as Error).message }))
       }
       bump()
     },

@@ -231,3 +231,92 @@ export function SmileIcon({ size = 18 }: IconProps) {
     </svg>
   )
 }
+
+/**
+ * 文字频道前面的那个记号（井号）。
+ *
+ * ⚠️ 为什么不用文字 `#` 而是画成 SVG ✗
+ *    用文字的话，"#" 的字形宽度和基线位置**由字体决定** ✓
+ *    而它右边跟着的是频道名（同一行、另一种字号）✗
+ *    结果是：不同系统字体下，`#` 和频道名的间距、垂直位置都不一样 ✓
+ *    而且它比 SVG 细、偏上 ✓ 和下面语音频道那个喇叭图标（SVG）
+ *    摆在同一列里会**明显不齐** ✗
+ *
+ * SVG 按 viewBox 的几何盒子绘制 ✓ 和喇叭图标共用同一套尺寸和线宽 ✓
+ * 同一列里天然对齐 ✓ 这正是这次把频道图标全换成 SVG 的原因 ✓
+ */
+export function HashIcon({ size = 16 }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{ display: 'block' }}
+    >
+      <path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18" />
+    </svg>
+  )
+}
+
+/**
+ * 文件夹。左侧「云端文件」入口用。
+ *
+ * ⚠️ 这里原来是个 📁 emoji ✗
+ *    emoji 的字形上下位置由**字体**决定 ✓ 和它右边的文字凑在一起时
+ *    会偏高或偏低 ✓ 而且不同系统画出来的样子差别很大 ✓
+ *    （输入框里的相机和回形针当年就是因为这个换成 SVG 的 ✓ 同一个理由）
+ */
+export function FolderIcon({ size = 16 }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{ display: 'block' }}
+    >
+      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+    </svg>
+  )
+}
+
+/**
+ * 图钉。两个地方用它：
+ *   · 聊天标题栏的「置顶消息」入口 ✓（在放大镜**左边** ✓）
+ *   · 消息上那个"已置顶"的小标记 ✓
+ *
+ * ⚠️ 用的是 Lucide `pin` 的路径，不是 Material `push_pin` ✗
+ *    Material 那个是**填充**图形 ✓ 和本项目"一律描边"的风格不一致 ✓
+ *    而且它的细节在 16px 下会糊成一坨 ✓ —— 和 GearIcon 那个注释是同一个教训 ✓
+ *    Lucide 这条是给 24px 描边设计的 ✓ 缩小之后依然分得清钉帽和针 ✓
+ */
+export function PinIcon({ size = 16 }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{ display: 'block' }}
+    >
+      <path d="M12 17v5" />
+      <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
+    </svg>
+  )
+}

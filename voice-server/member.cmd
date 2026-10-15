@@ -21,4 +21,4 @@ REM
 REM The first check turns a bare "Cannot find module" into a clear
 REM instruction -- the tool only exists on the server after deploy.cmd.
 
-ssh -p 17705 root@YOUR_SERVER_IP "cd /opt/voice-server && if [ ! -f backend/src/fix-member.mjs ]; then echo ''; echo '  [ERROR] backend/src/fix-member.mjs is not on the server yet.'; echo '          Run deploy.cmd first -- that uploads it.'; echo ''; exit 1; fi; sudo node backend/src/fix-member.mjs %*"
+ssh -p 22 root@YOUR_SERVER_IP "cd /opt/voice-server && if [ ! -f backend/src/fix-member.mjs ]; then echo ''; echo '  [ERROR] backend/src/fix-member.mjs is not on the server yet.'; echo '          Run deploy.cmd first -- that uploads it.'; echo ''; exit 1; fi; sudo node backend/src/fix-member.mjs %*"

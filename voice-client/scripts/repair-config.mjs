@@ -85,7 +85,8 @@ export function extractConfigs(dir) {
         try {
           const o = JSON.parse(raw)
           // 只要真的指向我们服务器、而且带身份的那种
-          if (o.apiUrl?.includes('YOUR_SERVER_IP') && o.userId) {
+          // ⚠️ 两台服务器都算（61.x 是旧的 NAT 机器 ✓ 154.x 是新的普通 VPS ✓）
+          if ((o.apiUrl?.includes('YOUR_SERVER_IP') || o.apiUrl?.includes('YOUR_SERVER_IP')) && o.userId) {
             found.push({ file: f, enc, raw, obj: o })
           }
         } catch {

@@ -440,6 +440,30 @@ body.col-resizing {
   text-align: left;
 }
 
+/* ── 有子频道的**父频道**：它只是个分组标题 ✗ ────────────────
+   ⚠️ 它不再能"进去"了 ✓（点它什么都不发生 ✓ 由 ChannelList 里
+      给 button 加 disabled 实现 ✓）
+
+   ⚠️ 但**不能让它变灰** ✗
+      浏览器的默认 disabled 样式是"褪色 + 半透明" ✓
+      那表示"这个按钮现在不可用" ✓ 会让人以为出了故障 ✓
+      而它其实是**正常的、只是性质变成了标题** ✓
+      所以这里把透明度拉回来、颜色调亮、加粗 ✓ 看起来像个分组名 ✓ */
+.channel-item-group:disabled {
+  cursor: default;
+  opacity: 1;
+  color: var(--text);
+  font-weight: 600;
+  /* 不给悬停反馈 ✓ 点不动的东西不该有"能点"的暗示 ✗ */
+  background: transparent;
+}
+
+/* 分组标题不受"选中态"影响 ✓
+   它本来就不该被选中 ✓ 万一残留了 active 类也别画出高亮 ✗ */
+.channel-item-group.active {
+  background: transparent;
+}
+
 .channel-item:hover {
   background: var(--hover-strong);
   color: var(--text);
@@ -457,6 +481,77 @@ body.col-resizing {
   display: flex;
   align-items: center;
   margin: 1px 8px;
+}
+
+/* 子频道缩进一格 ✓
+   ⚠️ 只动**外层**的 padding-left ✗ 不要同时去改 .channel-item 的 margin ✓
+      .channel-item 是 `width: calc(100% - 16px); margin: 1px 8px` ✓
+      它算的是**父元素的内容盒**✓ 所以父元素加了 padding-left 之后
+      它自己就窄了 16px、并且右移了 16px ✓
+      → **右边缘刚好不动** ✓ 左边缘退 16px ✓ 正是想要的效果 ✓
+      两边一起改的话右边会多缩一次 ✓ 看着就是没对齐 ✓ */
+.channel-row-child {
+  padding-left: 16px;
+  /* ⚠️ 连接线是绝对定位的伪元素 ✓ 得有个定位祖先 ✓ */
+  position: relative;
+}
+/* ── 子频道的树形连接线（└─）──────────────────────────────────
+   形状 —— 从父频道接下来、拐个弯指向子频道：
+
+       父频道
+         │
+         └── # 子频道
+
+   ⚠️ 用**伪元素**画，不动 JSX ✗
+      父频道和子频道现在共用同一套渲染 ✓（见 ChannelList 里的 withKids ✓）
+      为了画一根线去改 DOM 结构不值得 ✓ 风险大得多 ✓
+
+   ⚠️ 一个伪元素就能画出整个拐角 ✗
+      左边框 = 竖线 ✓ 下边框 = 横线 ✓ 左下圆角 = 那个弯 ✓
+      拆成两个伪元素反而要手动对齐接缝 ✓
+
+   ⚠️ 竖线只画到**行高的一半**（中线 ✓）
+      画满的话每个子频道都会画到自己的底边 ✓
+      最后一个下面会拖出一截悬空的线 ✗
+      —— 经典树形就是这么做的：上一行的竖线到中线为止 ✓
+         下一行的竖线紧接着接上来 ✓ 行间距只有 2px ✓ 看不出断 ✓
+
+   ⚠️ 颜色**不能用 `--line`** ✗（这块栽过一次 ✓）
+      `--line` 是**面板之间的分隔线**颜色 ✓ 非常暗 ✓
+      深色主题下它是 `#26272b` ✓ 而侧栏背景是 `#313338` ✓
+      → 一根 `#26272b` 的线画在 `#313338` 上 ≈ **看不见** ✗
+      几何全对、算出来的样式也全对 ✓ 就是**看不出来** ✗
+      —— 这种错只有**看图**才发现得了 ✓ 断言查不出来 ✓
+
+      改用 `--muted`（频道图标用的那个灰 ✓）再压到 55% ✓
+      深浅两个主题下都清楚 ✓ 又不会抢频道名的注意力 ✓ */
+.channel-row-child::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 0;
+  width: 10px;
+  height: 50%;
+  border-left: 1px solid color-mix(in srgb, var(--muted) 55%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--muted) 55%, transparent);
+  border-bottom-left-radius: 5px;
+  /* ⚠️ 伪元素也会吃鼠标事件 ✗ 它是纯装饰 ✓ 不能挡住点频道 ✓ */
+  pointer-events: none;
+}
+
+/* ⚠️ **第一个**子频道的竖线要一路伸到**父频道的中线** ✗
+   不伸的话它只在自己这一行里 ✓ 看着像个小钩子 ✓
+   而不像"从父频道接下来"的 ✗
+
+   父频道和子频道行高**一样** ✓（都是 .channel-row ✓）
+   所以"父频道的中线"就是往上**一整行** ✓ → `top: -50%` ✓
+   竖线从父频道中线一直画到自己中线 ✓ 再接上那根横线 ✓✓
+
+   用相邻兄弟选择器认出它：**紧跟在顶层频道后面的那个子频道** ✓
+   （withKids 铺平之后就是这个顺序 ✓ 不需要额外标记 ✓） */
+.channel-row:not(.channel-row-child) + .channel-row-child::before {
+  top: -50%;
+  height: 100%;
 }
 
 /* 一行里除了频道按钮还有个 ×，所以按钮不再自己占满整行 */
@@ -618,8 +713,11 @@ body.col-resizing {
 }
 
 .member-icon {
+  /* ⚠️ 原来是 🔊 靠 font-size 排位 ✓ 现在是 SVG ✓ 得自己居中 ✗
+     不写 flex 的话 SVG 会贴在基线上、比昵称偏上 ✓ */
+  display: flex;
+  align-items: center;
   flex: none;
-  font-size: 12px;
 }
 
 /* （「升管 / 撤管」的 .member-action 已经删掉了 ——
@@ -627,7 +725,13 @@ body.col-resizing {
 
 .channel-hash {
   color: var(--muted);
-  font-weight: 500;
+  /* ⚠️ 从文字 `#` 换成 SVG 之后这里必须自己撑开盒子 ✗
+     原来靠字号把 `#` 排在中线上 ✓ SVG 没有字号 ✓
+     不写 flex 它会贴基线、比频道名偏上 ✓
+     而下面语音频道那个喇叭也是 SVG ✓ 同一列里就不齐了 ✓ */
+  display: flex;
+  align-items: center;
+  flex: none;
 }
 
 .badge {
@@ -652,12 +756,33 @@ body.col-resizing {
   margin: 1px 8px 1px 26px;
   padding: 3px 6px;
   border-radius: 4px;
+  /* ⚠️⚠️ 底色 —— 这里连着栽过两次 ✗
+     第一次：不加底色 ✓ 那一行和侧栏完全融为一体 ✓
+     第二次：加了 `var(--bubble)` ✓ 而 **`--bubble` 和 `--sidebar` 是同一个值** ✗✗
+             深色都是 #2b2d31 ✓ 浅色都是 #e9ebee ✓
+             → 在 #2b2d31 上画 #2b2d31 ✓ **等于没画** ✗
+
+     ⚠️ 教训：**加底色之前必须看它画在什么上面** ✗
+        不能凭"这个变量听起来像个背景色"就拿来用 ✓
+
+     改法：相对**侧栏底色**调和 ✓ 而不是引用另一个变量 ✓
+     `color-mix(..., var(--text) 8%, var(--sidebar))`
+       → 深色主题：把浅色文字色混进去 → 比侧栏**亮**一点 ✓
+         浅色主题：把深色文字色混进去 → 比侧栏**暗**一点 ✓
+       → **两个主题自动都对** ✓ 不用手写两套值 ✓ */
+  background: color-mix(in srgb, var(--text) 8%, var(--sidebar));
   color: var(--muted);
   font-size: 13px;
 }
 
 .voice-member:hover {
-  background: var(--hover-strong);
+  /* ⚠️ hover 也要跟着上面的调和走 ✗
+     原来用的是 `--hover-strong`（一个固定值 ✓）
+     而底色现在是"相对侧栏调和出来的" ✓
+     两者深浅关系不保证 ✓ 会出现在浅色主题下 hover 反而更暗的怪事 ✗
+     → 同一个公式 ✓ 只是把比例从 8% 提到 18% ✓
+       两档永远是"底色 < hover" ✓ 两个主题都成立 ✓ */
+  background: color-mix(in srgb, var(--text) 18%, var(--sidebar));
   color: var(--text);
 }
 
@@ -953,6 +1078,245 @@ body.col-resizing {
   padding: 5px 10px;
   border-radius: 8px;
   background: var(--bubble);
+}
+
+/* ── 引用块（回复功能）─────────────────────────────────────────
+   ⚠️ 它必须**在气泡内部** ✓ 而且底色要比气泡**更深** ✗（这是明确要求 ✓）
+
+   ⚠️ 为什么用 color-mix 而不是写死一个颜色 ✗
+      写死的话只能对一个主题 ✓ 浅色主题下会变成一块突兀的深灰 ✗
+      color-mix 相对 --bubble 压暗 12% ✓ 两个主题都自动成立 ✓
+      （Chromium 111+ 就支持 ✓ 我们的 Electron 33 远高于这个 ✓）
+
+   左边那道竖线是"这是一段被引用的话"的通用视觉语言 ✓
+   和正文分开 ✓ 又不会喧宾夺主 ✓ */
+.chat-quote {
+  background: color-mix(in srgb, var(--bubble) 88%, #000 12%);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  padding: 3px 8px;
+  margin: 1px 0 3px;
+  font-size: 12px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.chat-quote-author {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 11.5px;
+}
+
+/* ⚠️ 引用正文必须**单行截断** ✗
+   引用一条很长的消息时，那段话会整段重复一遍 ✓
+   气泡被撑得比正文还高 ✓ 完全本末倒置 ✓
+   截成一行 + 省略号 ✓ 想看原文点被引用的那条 ✓ */
+.chat-quote-text {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* 原消息被删了（或者不属于这个频道 ✓ 服务端拒绝回填）✗ 两种都显示这个 */
+.chat-quote-gone {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* ── 输入框上方的回复提示条 ────────────────────────────────────
+   ⚠️ 必须一眼看出"我现在处于回复态" ✗
+      不然发出去才发现在引用别人的话 ✓ 很尴尬 ✓ */
+.reply-banner {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  min-width: 0;
+}
+
+.reply-banner-label {
+  flex: none;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.reply-banner-name {
+  flex: none;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.reply-banner-text {
+  min-width: 0;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reply-banner-x {
+  flex: none;
+  margin-left: auto;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.reply-banner-x:hover {
+  color: var(--text);
+}
+
+/* ── 消息表态（emoji reaction）────────────────────────────────
+   芯片排在消息内容**下面** ✓ 和正文分开 ✓ 不挤在一行里 ✓ */
+.chat-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.reaction-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.reaction-chip:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+/* ⚠️ "我点过"和"没点过"要**同时**靠颜色和边框区分 ✗
+   只靠颜色的话色盲用户看不出来 ✓
+   只靠边框的话在这种小尺寸下几乎看不出来 ✓
+   （这也是项目里图标开关一律加斜杠、不只换颜色的同一条理由 ✓） */
+.reaction-chip.mine {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
+.reaction-chip:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.reaction-emoji {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.reaction-count {
+  /* 等宽数字 ✓ 1 位和 2 位切换时芯片宽度不会跳 ✓ */
+  font-variant-numeric: tabular-nums;
+}
+
+.reaction-chip.add {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+/* ── 置顶 ──────────────────────────────────────────────────────
+   面板贴在标题栏下面展开 ✓（和搜索栏同一个位置逻辑 ✓ 两者互斥 ✓） */
+.chat-pinned {
+  flex: none;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  max-height: 45%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.chat-pinned-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  flex: none;
+}
+
+.chat-pinned-empty {
+  padding: 10px 14px 14px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* 列表可滚动 ✓ 但有上限高度（见 .chat-pinned 的 max-height ✓）
+   不然置顶 50 条会把聊天区挤没 ✗ */
+.chat-pinned-list {
+  overflow-y: auto;
+  min-height: 0;
+  padding: 0 8px 8px;
+}
+
+.pinned-item {
+  position: relative;
+  padding: 7px 10px;
+  margin-bottom: 5px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bubble) 88%, #000 12%);
+}
+
+.pinned-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  margin-bottom: 3px;
+}
+
+/* ⚠️ 正文要**限行数** ✗
+   置顶一条几千字的消息时，光它一条就能把面板占满 ✓
+   截到 4 行 + 省略号 ✓ 想看全文去聊天里看 ✓ */
+.pinned-body {
+  font-size: 13px;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.pinned-unpin {
+  margin-top: 6px;
+}
+
+/* 消息上那个「已置顶」小标记 ✓ 和表态芯片排在同一行 ✓ */
+.pinned-mark {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 /* 单条消息的悬停高亮（右键删除的提示）。
@@ -1664,6 +2028,14 @@ body.col-resizing {
   font-size: 12px;
 }
 
+/* ⚠️ 这一行是 **inline 布局**（它要靠 text-overflow: ellipsis）✗
+   所以里面的图标**不能**用 `display: flex` 居中 ✓ 那会把省略号弄失效 ✓
+   只能用 vertical-align 把它抬到和文字中线对齐 ✓
+   原来是 🔊 emoji ✓ 那个按字体自己就对齐了 ✓ 换成 SVG 才需要这一条 ✓ */
+.voice-panel-text svg {
+  vertical-align: -2px;
+}
+
 /* 语音控制按钮：图标 + 文字，一行两个 */
 .voice-btn {
   flex: 1;
@@ -2057,6 +2429,16 @@ body.col-resizing {
 
 .kind-row button {
   flex: 1;
+  /* ⚠️⚠️ 必须有这一行 ✗
+     图标组件自带 `style={{ display: 'block' }}` ✓
+     （那是给频道列表用的 ✓ 在那里它得自己撑开盒子 ✓）
+     而**块级元素在按钮里会强制换行** ✗
+     → 「#」和「文字频道」被拆成上下两行 ✓ 而且中间空一大截 ✓（真出现过 ✓）
+     把按钮变成 flex 容器就压住了 ✓ 顺便用 gap 精确控制间距 ✓ */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
 }
 
 .modal h2 {
@@ -2323,8 +2705,10 @@ body.col-resizing {
 }
 
 .cloud-entry-icon {
+  /* 原来是 📁 靠 font-size 排 ✓ 现在是 SVG ✓ 要自己居中 ✓ */
+  display: flex;
+  align-items: center;
   flex: none;
-  font-size: 14px;
 }
 
 .cloud-entry-name {
@@ -2454,6 +2838,20 @@ body.col-resizing {
 
 .cloud-header h2 {
   margin: 0;
+  /* 标题里现在是 SVG 图标 ✓ 要 flex 居中对齐，不能靠基线 ✓ */
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+/* ⚠️ 图标从 emoji 换成 SVG 之后的一条通用补偿 ✗
+   emoji 的字形位置由**字体**决定 ✓ 换成 SVG 后会贴在基线上、看着偏上 ✓
+   `vertical-align` 对 **flex 子项无效** ✓ 所以这条只会帮到
+   那些还是 inline 布局的按钮 ✓ 已经 flex 的按钮完全不受影响 ✓
+   （典型：创建频道对话框里那个「语音频道」按钮 ✓ 它没有专门的类名 ✓
+     所以只能在这里做一次通用的 ✓） */
+button > svg {
+  vertical-align: -2px;
 }
 
 .cloud-list {
@@ -2533,4 +2931,37 @@ body.col-resizing {
 
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* ── 投屏的传输方式徽章 ────────────────────────────────────────
+   ⚠️ 必须让用户看得见 ✗
+      走直连和走服务器，延迟/画质可能不一样 ✓
+      出问题时他得知道该怪谁 ✓
+      而且这也是**唯一**能确认 P2P 真的生效了的办法 ✓
+      （不然只能靠"服务器流量好像少了"去猜 ✗） */
+.p2p-badge {
+  flex: none;
+  padding: 1px 7px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+/* 直连成功 ✓ 绿 —— 和"正在说话"那个绿灯同一个色系 ✓ */
+.p2p-badge.p2p-ok {
+  border-color: #3ba55d;
+  color: #3ba55d;
+  background: color-mix(in srgb, #3ba55d 15%, transparent);
+}
+
+/* 走服务器 ⚠️ 黄，**不是红** ✗
+   这不是故障 ✓ 画面照常 ✓ 只是费服务器的流量 ✓
+   标成红色会让人以为坏了 ✓ 然后去重启软件 ✓ */
+.p2p-badge.p2p-warn {
+  border-color: #d9a441;
+  color: #d9a441;
+  background: color-mix(in srgb, #d9a441 15%, transparent);
 }

@@ -85,7 +85,7 @@ curl -s http://127.0.0.1:3005/health
   "serverVersion": "1.0.0",
   "uptimeSec": 163,
   "memoryMB": 97,
-  "livekitUrl": "ws://YOUR_SERVER_IP:17707"
+  "livekitUrl": "ws://YOUR_SERVER_IP:7880"
 }
 ```
 

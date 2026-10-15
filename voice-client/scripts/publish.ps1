@@ -7,7 +7,7 @@
 
   或者直接：
      .\scripts\publish.ps1
-     .\scripts\publish.ps1 -Server root@1.2.3.4 -RemoteDir /opt/voice-server/updates
+     .\scripts\publish.ps1（默认发布到 YOUR_SERVER_IP ✓ 想发别处用 -Server/-Port 覆盖 ✓）
      .\scripts\publish.ps1 -NoPrune        # 这次不清理旧包
 
   上传的是三个东西（**只传当前版本，不会把历史版本重传一遍**）：
@@ -27,8 +27,8 @@
 #>
 param(
   [string]$Server = "root@YOUR_SERVER_IP",
-  # NAT 型 VPS：SSH 映射到 17705 ✗ 不是 22 ✓（ssh 用 -p，scp 用 -P ✗）
-  [int]$Port = 17705,
+  # 普通 VPS：SSH 走默认 22 ✓（ssh 用 -p，scp 用 -P ✗）
+  [int]$Port = 22,
   [string]$RemoteDir = "/opt/voice-server/updates",
   [string]$PruneScript = "/opt/voice-server/scripts/prune-updates.sh",
   [switch]$NoPrune

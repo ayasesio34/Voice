@@ -8,6 +8,16 @@ CREATE TABLE IF NOT EXISTS channels (
   name        TEXT NOT NULL,
   kind        TEXT NOT NULL DEFAULT 'text',   -- 'text' | 'voice'
   position    INTEGER NOT NULL DEFAULT 0,
+  -- 子频道：指向父频道 id ✓ NULL = 顶层频道 ✓
+  --
+  -- ⚠️ **只允许一层** ✗ —— 父频道自己必须是顶层 ✓
+  --    这个约束在服务端的处理里校验 ✓（库里没法表达"只有一层" ✗）
+  --
+  -- ⚠️ 这个外键**只对新建的库有效** ✗
+  --    老库是靠 migrate() 里 ALTER TABLE 加上来的 ✓
+  --    而 SQLite **不支持用 ALTER 加外键** ✓
+  --    所以 deleteChannel() 里**另外显式删子频道** ✓ 新旧库行为才一致 ✓
+  parent_id   TEXT REFERENCES channels(id) ON DELETE CASCADE,
   created_at  INTEGER NOT NULL
 );
 
@@ -21,12 +31,59 @@ CREATE TABLE IF NOT EXISTS messages (
   -- 存 JSON 而不是拆成列，是因为它就是"消息的一个属性"，
   -- 而且以后想加"多附件"只改这一处
   attachment  TEXT,
+  -- 回复的目标消息 id。不是回复就是 NULL。
+  --
+  -- ⚠️ 只存 id，**不存被引用消息的副本** ✗
+  --    存副本的话，原消息被删了/改了，副本就对不上了 ✓
+  --    代价是读的时候要多查一次 ✓ 但消息量很小，值得 ✓
+  --
+  -- ⚠️ 用这个字段之前**必须校验同频道** ✗ 见 attachReplyPreviews()
+  reply_to    INTEGER,
+  -- 置顶。NULL = 没置顶 ✓ 有值就是置顶的时间 ✓
+  --
+  -- ⚠️ 为什么放在 messages 上、而不是单开一张 pins 表 ✗
+  --    单开表的话，消息被删就得靠级联去清 ✓（reactions 那张表就得这么办 ✓）
+  --    而这里"置顶"就是消息的一个**属性** ✓ 一个频道里一条消息最多一个状态 ✓
+  --    放同一行天然跟着消息走 ✓ 不用级联、不用 join ✓ 也不用担心孤儿 ✓
+  --
+  -- ⚠️ 但**列表接口要单独做** ✗
+  --    置顶的往往是很老的消息 ✓ 不一定在客户端已加载的那一页里 ✓
+  --    让客户端从已加载的消息里筛，会漏掉大部分置顶 ✓
+  pinned_at   INTEGER,
+  -- 谁置顶的。展示用（"由某某置顶"✓）
+  pinned_by   TEXT,
   created_at  INTEGER NOT NULL
 );
 
 -- 按频道倒序翻页是唯一的查询模式，索引就按这个建
 CREATE INDEX IF NOT EXISTS idx_messages_channel
   ON messages (channel_id, id DESC);
+
+-- ─────────────────────────────────────────────────────────────
+-- 消息表态（emoji reaction）
+--
+-- 主键是「消息 + 人 + 表情」三件套 ✓ 所以同一个人对同一条消息
+-- 点同一个 emoji 是**幂等**的 ✓ 天然支持"再点一次就取消" ✓
+-- 而一个人可以对同一条消息点**好几个不同**的 emoji ✓（Discord 就是这样 ✓）
+--
+-- ⚠️ 级联删除是**必须**的 ✗（而且 PRAGMA foreign_keys = ON 已经开了 ✓）
+--    消息被删 → 它的表态跟着走 ✓
+--    频道被删 → 消息走 ✓ 消息的级联再带走表态 ✓（SQLite 支持链式级联 ✓）
+--    不级联的话表会越积越大 ✓ 而且孤儿行会让"乐观更新"对不上 ✓
+-- ─────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS reactions (
+  message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  user_id    TEXT NOT NULL,
+  -- 存一份名字只是**兜底** ✓ 读的时候优先 join members 拿实时名字 ✗
+  -- （人改了昵称之后，旧表态里不该还挂着老名字 ✓）
+  user_name  TEXT NOT NULL,
+  emoji      TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (message_id, user_id, emoji)
+);
+
+-- 按消息批量取表态是唯一的查询模式 ✓
+CREATE INDEX IF NOT EXISTS idx_reactions_message ON reactions (message_id);
 
 -- ─────────────────────────────────────────────────────────────
 -- 云端文件
@@ -144,9 +201,36 @@ function migrate(db) {
     .all()
     .map((c) => c.name);
 
+  const channelCols = db
+    .prepare('PRAGMA table_info(channels)')
+    .all()
+    .map((c) => c.name);
+
   if (!messageCols.includes('attachment')) {
     db.exec('ALTER TABLE messages ADD COLUMN attachment TEXT');
     console.log('[info] 数据库升级：messages 表新增 attachment 列');
+  }
+
+  // 回复功能。老消息一律是 NULL —— 它们本来就不是回复 ✓ 语义正确 ✓
+  if (!messageCols.includes('reply_to')) {
+    db.exec('ALTER TABLE messages ADD COLUMN reply_to INTEGER');
+    console.log('[info] 数据库升级：messages 表新增 reply_to 列');
+  }
+
+  // 置顶。老消息一律 NULL = 没置顶 ✓ 正确 ✓
+  if (!messageCols.includes('pinned_at')) {
+    db.exec('ALTER TABLE messages ADD COLUMN pinned_at INTEGER');
+    console.log('[info] 数据库升级：messages 表新增 pinned_at 列');
+  }
+  if (!messageCols.includes('pinned_by')) {
+    db.exec('ALTER TABLE messages ADD COLUMN pinned_by TEXT');
+    console.log('[info] 数据库升级：messages 表新增 pinned_by 列');
+  }
+
+  // 子频道。老库里的频道一律是顶层 ✓ NULL 正确 ✓
+  if (!channelCols.includes('parent_id')) {
+    db.exec('ALTER TABLE channels ADD COLUMN parent_id TEXT');
+    console.log('[info] 数据库升级：channels 表新增 parent_id 列（老频道都是顶层）');
   }
 
   const fileCols = db
@@ -253,9 +337,10 @@ export function upsertGame(db, exe, name) {
   return { ok: true, exe: key, changed: true };
 }
 
-export function listChannels(db) {  return db
+export function listChannels(db) {
+  return db
     .prepare(
-      `SELECT id, name, kind, position FROM channels
+      `SELECT id, name, kind, position, parent_id FROM channels
        WHERE kind != 'dm'
        ORDER BY position, id`
     )
@@ -263,24 +348,68 @@ export function listChannels(db) {  return db
 }
 
 export function getChannel(db, id) {
-  return db.prepare('SELECT id, name, kind FROM channels WHERE id = ?').get(id) ?? null;
+  return (
+    db.prepare('SELECT id, name, kind, parent_id FROM channels WHERE id = ?').get(id) ?? null
+  );
 }
 
 export function channelExists(db, id) {
   return Boolean(db.prepare('SELECT 1 FROM channels WHERE id = ?').get(id));
 }
 
-export function createChannel(db, { id, name, kind }) {
+/**
+ * 建频道（也可以是子频道 ✓）。
+ *
+ * ⚠️ 「只允许一层」这个约束**不在这里校验** ✗
+ *    它属于业务规则（父频道必须存在、必须同类、它自己必须是顶层 ✓）
+ *    放在服务端的处理里，报错才能带上有意义的错误码 ✓
+ *    这里只负责把 parentId 写进去 ✓
+ */
+export function createChannel(db, { id, name, kind, parentId = null }) {
   const row = db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS pos FROM channels').get();
   db.prepare(
-    `INSERT INTO channels (id, name, kind, position, created_at) VALUES (?, ?, ?, ?, ?)`
-  ).run(id, name, kind, Number(row?.pos ?? 0), Date.now());
-  return db.prepare('SELECT id, name, kind, position FROM channels WHERE id = ?').get(id);
+    `INSERT INTO channels (id, name, kind, position, parent_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(id, name, kind, Number(row?.pos ?? 0), parentId, Date.now());
+  return db
+    .prepare('SELECT id, name, kind, position, parent_id FROM channels WHERE id = ?')
+    .get(id);
 }
 
+/** 一个频道下面直接挂着几个子频道 ✓（删之前要告诉用户会连坐几个 ✓） */
+export function countChildren(db, id) {
+  return Number(db.prepare('SELECT COUNT(*) AS c FROM channels WHERE parent_id = ?').get(id).c);
+}
+
+export function childChannelIds(db, id) {
+  return db
+    .prepare('SELECT id FROM channels WHERE parent_id = ?')
+    .all(id)
+    .map((r) => r.id);
+}
+
+/**
+ * 删频道（连同它的子频道 ✓）。
+ *
+ * ⚠️ 子频道要**显式删掉**，不能只靠外键 ✗
+ *    表定义里写了 `parent_id REFERENCES channels(id) ON DELETE CASCADE` ✓
+ *    但那只对**新建的库**有效 ✓
+ *    老库的 `parent_id` 是 migrate() 里 ALTER TABLE 加上来的 ✓
+ *    而 SQLite **不支持用 ALTER 加外键** ✗
+ *    只靠级联的话，老库上删父频道会**留下一堆孤儿子频道** ✓
+ *    它们会出现在列表里、但点进去是个空壳 ✓ 而且再也删不掉父频道之外的东西 ✓
+ *    所以这里自己删 ✓ 新旧库行为一致 ✓
+ *
+ * 消息、表态靠它们自己的级联 ✓（那两条是建表时就有的 ✓ 新旧库都有 ✓）
+ *
+ * 返回 `{ ok, removedChildren }` ✓ —— 数量要回给客户端 ✓
+ */
 export function deleteChannel(db, id) {
-  // messages 有 ON DELETE CASCADE，会一起删掉
-  return db.prepare('DELETE FROM channels WHERE id = ?').run(id).changes > 0;
+  const childIds = childChannelIds(db, id);
+  const del = db.prepare('DELETE FROM channels WHERE id = ?');
+  for (const cid of childIds) del.run(cid);
+  const ok = del.run(id).changes > 0;
+  return { ok, removedChildren: childIds.length };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -315,11 +444,11 @@ export function deleteMessage(db, id) {
   return db.prepare('DELETE FROM messages WHERE id = ?').run(id).changes > 0;
 }
 
-export function insertMessage(db, { channelId, authorId, authorName, body, attachment }) {
+export function insertMessage(db, { channelId, authorId, authorName, body, attachment, replyTo }) {
   const info = db
     .prepare(
-      `INSERT INTO messages (channel_id, author_id, author_name, body, attachment, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO messages (channel_id, author_id, author_name, body, attachment, reply_to, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       channelId,
@@ -327,6 +456,7 @@ export function insertMessage(db, { channelId, authorId, authorName, body, attac
       authorName,
       body,
       attachment ? JSON.stringify(attachment) : null,
+      replyTo == null ? null : Number(replyTo),
       Date.now()
     );
 
@@ -334,6 +464,54 @@ export function insertMessage(db, { channelId, authorId, authorName, body, attac
   return mapMessage(
     db.prepare('SELECT * FROM messages WHERE id = ?').get(Number(info.lastInsertRowid))
   );
+}
+
+/**
+ * 给一批消息补上「被引用消息的摘要」（`reply_preview`）。
+ *
+ * ── 为什么由**服务端**解析 ✗ ────────────────────────────────
+ *   被引用的消息很可能**不在客户端已加载的那一页里** ✓
+ *   （往前翻很久才引用得到的老消息就是这样）
+ *   让客户端自己去找的话它找不到 ✓ 只能显示"原消息不存在" ✗ 那是错的 ✓
+ *
+ * ── ⚠️⚠️ 同频道校验是**必须**的，这是条真实的信息泄露路径 ✗ ──
+ *   `reply_to` 只是一个裸 id ✓
+ *   如果不校验，任何人都能在**公开频道**里发一条 reply_to 指向**私聊**消息 ✓
+ *   服务端把摘要一填 ✓ 私聊内容就出现在公开频道里了 ✗
+ *   所以这里只回填「确实属于同一条频道」的那些 ✓ 其余一律留空 ✓
+ *   （留空在界面上显示成"原消息不存在" ✓ 不泄露任何东西 ✓）
+ *
+ * ── 为什么正文要截断 ✗ ──────────────────────────────────────
+ *   摘要只是给人看个大概 ✓ 几百字的长消息没必要整条复制一遍 ✓
+ */
+export function attachReplyPreviews(db, messages) {
+  const targets = messages.filter((m) => m && m.reply_to != null);
+  if (targets.length === 0) return messages;
+
+  const ids = [...new Set(targets.map((m) => Number(m.reply_to)))].filter(Number.isFinite);
+  if (ids.length === 0) return messages;
+
+  const rows = db
+    .prepare(
+      `SELECT id, channel_id, author_id, author_name, body FROM messages
+       WHERE id IN (${ids.map(() => '?').join(',')})`
+    )
+    .all(...ids);
+  const byId = new Map(rows.map((r) => [Number(r.id), r]));
+
+  for (const m of targets) {
+    const src = byId.get(Number(m.reply_to));
+    m.reply_preview =
+      src && src.channel_id === m.channel_id
+        ? {
+            id: Number(src.id),
+            author_id: src.author_id,
+            author_name: src.author_name,
+            body: String(src.body).slice(0, 200),
+          }
+        : null;
+  }
+  return messages;
 }
 
 /**
@@ -356,7 +534,159 @@ export function listMessages(db, { channelId, before, limit = 50 }) {
         .all(channelId, limit);
 
   // 查询是倒序取的（为了拿"最近 N 条"），返回前翻正
-  return rows.reverse().map(mapMessage);
+  // 顺带把"被引用消息的摘要"补上 ✓ 见 attachReplyPreviews 里的同频道校验 ✗
+  return reactionsForMessages(db, attachReplyPreviews(db, rows.reverse().map(mapMessage)));
+}
+
+/** 一个频道最多置顶多少条。Discord 也是 50 ✓ 防止无限增长 ✓ */
+export const PIN_LIMIT = 50;
+
+export function countPinned(db, channelId) {
+  return Number(
+    db
+      .prepare('SELECT COUNT(*) AS c FROM messages WHERE channel_id = ? AND pinned_at IS NOT NULL')
+      .get(channelId).c
+  );
+}
+
+/**
+ * 置顶 / 取消置顶（同一条再来一次就是取消 ✓）。
+ *
+ * 返回 `{ pinned, full }` ✓ 或者消息不存在时 `null` ✓
+ *   pinned = 操作之后是置顶状态吗 ✓（客户端据此给提示 ✓）
+ *   full   = 想置顶但到上限了 ✓（和"取消成功"必须分开 ✗ 提示完全不同 ✓）
+ */
+export function setPinned(db, { messageId, byName }) {
+  const row = db.prepare('SELECT channel_id, pinned_at FROM messages WHERE id = ?').get(messageId);
+  if (!row) return null;
+
+  if (row.pinned_at != null) {
+    db.prepare('UPDATE messages SET pinned_at = NULL, pinned_by = NULL WHERE id = ?').run(messageId);
+    return { pinned: false, full: false };
+  }
+
+  // ⚠️ 上限判断必须在**置顶之前** ✗ 之后判断就晚了 ✓
+  if (countPinned(db, row.channel_id) >= PIN_LIMIT) {
+    return { pinned: false, full: true };
+  }
+
+  db.prepare('UPDATE messages SET pinned_at = ?, pinned_by = ? WHERE id = ?').run(
+    Date.now(),
+    byName,
+    messageId
+  );
+  return { pinned: true, full: false };
+}
+
+/**
+ * 取一个频道里被置顶的消息。
+ *
+ * ⚠️ 顺序按 `pinned_at` 倒序，**不是**按消息 id ✗
+ *    刚置顶的应该出现在列表最上面 ✓ **哪怕它本身是很老的消息** ✓
+ *    按 id 排的话，新置顶一条三个月前的消息会掉到列表最底下 ✓ 根本找不到 ✓
+ *
+ * ⚠️ 这里也要补引用摘要和表态 ✗
+ *    置顶列表里显示的是**完整的消息** ✓ 和聊天里看到的一模一样 ✓
+ *    少补了的话，置顶列表里的消息会缺引用块、缺表态芯片 ✓ 看着像另一个东西 ✓
+ */
+export function listPinned(db, channelId, limit = PIN_LIMIT) {
+  const rows = db
+    .prepare(
+      `SELECT * FROM messages
+       WHERE channel_id = ? AND pinned_at IS NOT NULL
+       ORDER BY pinned_at DESC LIMIT ?`
+    )
+    .all(channelId, limit);
+  return reactionsForMessages(db, attachReplyPreviews(db, rows.map(mapMessage)));
+}
+
+/**
+ * 给一批消息补上它们各自的 emoji 表态。
+ *
+ * ── 为什么「我在不在里面」**不由服务端算** ✗ ────────────────
+ *   同一条广播发给所有人 ✓ 但"我点过没有"对每个人都不一样 ✗
+ *   如果服务端算好一个 `mine` 字段 ✓ 那条广播就只对一个人是对的 ✓
+ *   所以这里下发的是 `users: [{id, name}]` ✓
+ *   客户端自己判断 `users.some(u => u.id === myUserId)` ✓
+ *
+ * ── 名字为什么要 join members ✗ ────────────────────────────
+ *   表里存了一份 user_name 只是兜底 ✓
+ *   直接用它会出问题：人改了昵称之后，**旧表态里还挂着老名字** ✓
+ *   所以优先拿 members 里的实时名字 ✓ 查不到才退回存的那份 ✓
+ *
+ * ── 排序规则 ✓ ────────────────────────────────────────────
+ *   按人数从多到少 ✓（大家常用的那个排前面 ✓ 一眼就能点到 ✓）
+ *   人数相同时保持**第一次被使用**的先后 ✓
+ *   （SQL 已经按 created_at 排好 ✓ JS 的 sort 是稳定的 ✓ 所以天然成立 ✓）
+ */
+export function reactionsForMessages(db, messages) {
+  if (messages.length === 0) return messages;
+
+  const ids = messages.map((m) => Number(m.id)).filter(Number.isFinite);
+  if (ids.length === 0) return messages;
+
+  const rows = db
+    .prepare(
+      `SELECT r.message_id, r.user_id, r.emoji, COALESCE(m.name, r.user_name) AS user_name
+       FROM reactions r
+       LEFT JOIN members m ON m.user_id = r.user_id
+       WHERE r.message_id IN (${ids.map(() => '?').join(',')})
+       ORDER BY r.created_at ASC`
+    )
+    .all(...ids);
+
+  // message_id -> emoji -> [ {id,name} ]
+  const grouped = new Map();
+  for (const r of rows) {
+    const mid = Number(r.message_id);
+    let byEmoji = grouped.get(mid);
+    if (!byEmoji) {
+      byEmoji = new Map();
+      grouped.set(mid, byEmoji);
+    }
+    let users = byEmoji.get(r.emoji);
+    if (!users) {
+      users = [];
+      byEmoji.set(r.emoji, users);
+    }
+    users.push({ id: r.user_id, name: r.user_name });
+  }
+
+  for (const m of messages) {
+    const byEmoji = grouped.get(Number(m.id));
+    m.reactions = byEmoji
+      ? [...byEmoji.entries()]
+          .map(([emoji, users]) => ({ emoji, users }))
+          .sort((a, b) => b.users.length - a.users.length)
+      : [];
+  }
+  return messages;
+}
+
+/**
+ * 给一条消息加/取消一个表态（同一个 emoji 再点一次就取消 ✓）。
+ *
+ * 返回**操作之后**还存在吗：true = 加上了 ✓ false = 取消了 ✓
+ */
+export function toggleReaction(db, { messageId, userId, userName, emoji }) {
+  const existing = db
+    .prepare('SELECT 1 FROM reactions WHERE message_id = ? AND user_id = ? AND emoji = ?')
+    .get(messageId, userId, emoji);
+
+  if (existing) {
+    db.prepare('DELETE FROM reactions WHERE message_id = ? AND user_id = ? AND emoji = ?').run(
+      messageId,
+      userId,
+      emoji
+    );
+    return false;
+  }
+
+  db.prepare(
+    `INSERT OR REPLACE INTO reactions (message_id, user_id, user_name, emoji, created_at)
+     VALUES (?, ?, ?, ?, ?)`
+  ).run(messageId, userId, userName, emoji, Date.now());
+  return true;
 }
 
 // ─────────────────────────────────────────────────────────────

@@ -5,6 +5,7 @@ import { acceleratorHint, captureAccelerator, formatAccelerator } from '../lib/s
 import type { Theme } from '../lib/theme'
 import type { MicOptions } from '../hooks/useVoiceRoom'
 import { AvatarPicker } from './AvatarPicker'
+import { LANGS, useLang, useSetLang, useT, type Lang, type MsgKey } from '../lib/i18n'
 
 export type ShareSettings = {
   presetKey: string
@@ -78,14 +79,14 @@ type SectionKey =
  * 原来设置是**一条长滚动**：七八节内容上下堆着，找一项得来回翻。
  * 拆成两栏之后每一屏只做一件事，也不用滚了。
  */
-const SECTIONS: { key: SectionKey; label: string }[] = [
-  { key: 'profile', label: '个人资料' },
-  { key: 'appearance', label: '外观' },
-  { key: 'voice', label: '语音' },
-  { key: 'screen', label: '屏幕共享' },
-  { key: 'general', label: '通用' },
-  { key: 'advanced', label: '高级' },
-  { key: 'about', label: '关于' },
+const SECTIONS: { key: SectionKey; labelKey: MsgKey }[] = [
+  { key: 'profile', labelKey: 'settings.tab.profile' },
+  { key: 'appearance', labelKey: 'settings.tab.appearance' },
+  { key: 'voice', labelKey: 'settings.tab.voice' },
+  { key: 'screen', labelKey: 'settings.tab.screen' },
+  { key: 'general', labelKey: 'settings.tab.general' },
+  { key: 'advanced', labelKey: 'settings.tab.advanced' },
+  { key: 'about', labelKey: 'settings.tab.about' },
 ]
 
 export function SettingsDialog({
@@ -116,6 +117,10 @@ export function SettingsDialog({
   onReportGame,
 }: Props) {
   const [cfg, setCfg] = useState<AppConfig>(config)
+  /** 界面文案 ✓（设置面板目前只搬了分页标签和语言那一块 ✓ 其余还是写死的中文 ✗） */
+  const t = useT()
+  const lang = useLang()
+  const setLang = useSetLang()
   const [sh, setSh] = useState<ShareSettings>(share)
   const [tab, setTab] = useState<SectionKey>('profile')
 
@@ -166,7 +171,7 @@ export function SettingsDialog({
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal settings-modal" onClick={(e) => e.stopPropagation()}>
-        <h2>设置</h2>
+        <h2>{t('settings.title')}</h2>
 
         <div className="settings-body">
           <nav className="settings-nav">
@@ -176,7 +181,7 @@ export function SettingsDialog({
                 className={`settings-nav-item ${tab === s.key ? 'active' : ''}`}
                 onClick={() => setTab(s.key)}
               >
-                {s.label}
+                {s.labelKey ? t(s.labelKey) : s.key}
               </button>
             ))}
           </nav>
@@ -185,11 +190,11 @@ export function SettingsDialog({
             {tab === 'profile' && (
               <>
                 <label>
-                  昵称
+                  {t('settings.nickname')}
                   <input
                     value={cfg.nickname}
                     onChange={(e) => setCfg({ ...cfg, nickname: e.target.value })}
-                    placeholder="随便取一个"
+                    placeholder={t('settings.nicknamePlaceholder')}
                     maxLength={24}
                   />
                 </label>
@@ -202,60 +207,88 @@ export function SettingsDialog({
             )}
 
             {tab === 'appearance' && (
-              <label>
-                界面主题
-                <select
-                  value={theme}
-                  onChange={(e) => onSetTheme(e.target.value === 'light' ? 'light' : 'dark')}
-                >
-                  <option value="dark">深色</option>
-                  <option value="light">浅色</option>
-                </select>
-              </label>
+              <>
+                <label>
+                  {t('settings.theme')}
+                  <select
+                    value={theme}
+                    onChange={(e) => onSetTheme(e.target.value === 'light' ? 'light' : 'dark')}
+                  >
+                    <option value="dark">{t('settings.themeDark')}</option>
+                    <option value="light">{t('settings.themeLight')}</option>
+                  </select>
+                </label>
+
+                {/* 界面语言 ✓
+                    ⚠️ 它放在「外观」而不是「通用」✗
+                       语言和主题一样是"看着舒不舒服"这一类的 ✓
+                       而且是**立刻生效**的 ✓ 和主题的行为也一致 ✓ */}
+                <label>
+                  {t('settings.language')}
+                  <select
+                    value={lang}
+                    onChange={(e) => {
+                      // ⚠️ 不要直接 `as Lang` 糊过去 ✗
+                      //    选项是我们自己渲染的 ✓ 理论上一定合法 ✓
+                      //    但校验一次是免费的 ✓ 而它挡住的是一整类
+                      //    "将来有人加了选项忘了同步"的 bug ✓
+                      const v = e.target.value
+                      if (v in LANGS) setLang(v as Lang)
+                    }}
+                  >
+                    {Object.entries(LANGS).map(([code, info]) => (
+                      <option key={code} value={code}>
+                        {info.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p className="note-line">{t('settings.languageHint')}</p>
+              </>
             )}
 
             {tab === 'voice' && (
               <>
-                <h3>音频设备</h3>
+                <h3>{t('settings.audioDevices')}</h3>
                 <label>
-                  输入设备（麦克风）
+                  {t('settings.inputDevice')}
                   <select
                     value={activeInputId}
                     disabled={!hasVoiceRoom}
                     onChange={(e) => onSwitchDevice('audioinput', e.target.value)}
                   >
-                    <option value="">系统默认</option>
+                    <option value="">{t('settings.systemDefault')}</option>
                     {devices.inputs.map((d, i) => (
                       <option key={d.deviceId || i} value={d.deviceId}>
-                        {d.label || `麦克风 ${i + 1}`}
+                        {d.label || t('settings.micN', { n: i + 1 })}
                       </option>
                     ))}
                   </select>
                 </label>
                 <label>
-                  输出设备（听声音用）
+                  {t('settings.outputDevice')}
                   <select
                     value={activeOutputId}
                     disabled={!hasVoiceRoom}
                     onChange={(e) => onSwitchDevice('audiooutput', e.target.value)}
                   >
-                    <option value="">系统默认</option>
+                    <option value="">{t('settings.systemDefault')}</option>
                     {devices.outputs.map((d, i) => (
                       <option key={d.deviceId || i} value={d.deviceId}>
-                        {d.label || `扬声器 ${i + 1}`}
+                        {d.label || t('settings.speakerN', { n: i + 1 })}
                       </option>
                     ))}
                   </select>
                 </label>
 
-                <h3>麦克风处理</h3>
+                <h3>{t('settings.micProcessing')}</h3>
                 <label className="checkbox">
                   <input
                     type="checkbox"
                     checked={micOptions.noiseSuppression}
                     onChange={(e) => onSetMicOption('noiseSuppression', e.target.checked)}
                   />
-                  降噪
+                  {t('settings.noiseSuppression')}
                 </label>
                 <label className="checkbox">
                   <input
@@ -263,7 +296,7 @@ export function SettingsDialog({
                     checked={micOptions.echoCancellation}
                     onChange={(e) => onSetMicOption('echoCancellation', e.target.checked)}
                   />
-                  回声消除
+                  {t('settings.echoCancellation')}
                 </label>
                 <label className="checkbox">
                   <input
@@ -271,7 +304,7 @@ export function SettingsDialog({
                     checked={micOptions.autoGainControl}
                     onChange={(e) => onSetMicOption('autoGainControl', e.target.checked)}
                   />
-                  自动增益
+                  {t('settings.autoGain')}
                 </label>
               </>
             )}
@@ -279,7 +312,7 @@ export function SettingsDialog({
             {tab === 'screen' && (
               <>
                 <label>
-                  画质档位
+                  {t('settings.quality')}
                   <select
                     value={sh.presetKey}
                     onChange={(e) => setSh({ ...sh, presetKey: e.target.value })}
@@ -292,7 +325,7 @@ export function SettingsDialog({
                   </select>
                 </label>
                 <label>
-                  编码器
+                  {t('settings.codec')}
                   <select
                     value={sh.codec}
                     onChange={(e) => setSh({ ...sh, codec: e.target.value as VideoCodecChoice })}
@@ -305,17 +338,17 @@ export function SettingsDialog({
                   </select>
                 </label>
                 <label>
-                  内容提示
+                  {t('settings.contentHint')}
                   <select
                     value={sh.contentHint}
                     onChange={(e) =>
                       setSh({ ...sh, contentHint: e.target.value as ShareSettings['contentHint'] })
                     }
                   >
-                    <option value="text">文字优先（看代码/网页）</option>
-                    <option value="motion">★ 视频优先（看视频/游戏）</option>
-                    <option value="detail">细节优先</option>
-                    <option value="">不设置</option>
+                    <option value="text">{t('settings.hintText')}</option>
+                    <option value="motion">{t('settings.hintMotion')}</option>
+                    <option value="detail">{t('settings.hintDetail')}</option>
+                    <option value="">{t('settings.hintNone')}</option>
                   </select>
                 </label>
                 {/* ⚠️ 这一条是**操作指引**，不是解释 —— 选错了症状很明显：
@@ -323,61 +356,60 @@ export function SettingsDialog({
                     「视频优先」放文档 = **发虚** ✓（缺带宽时降分辨率）
                     把它写出来，用户才知道该选哪个 ✓ */}
                 <p className="note-line">
-                  放视频/游戏时一定要选「视频优先」—— 选「文字优先」会一直压帧率，看着卡顿。
-                  反过来看代码、网页就用「文字优先」，文字才够锐利。
+                  {t('settings.hintTip')}
                 </p>
                 {/* 这一条**必须留着** —— 不写的话用户改完档位发现没变化，
                     会以为设置坏了。它不是"解释"，是操作后果。 */}
-                <p className="note-line">改动要停止共享再重新共享才生效。</p>
+                <p className="note-line">{t('settings.shareRestartNote')}</p>
               </>
             )}
 
             {tab === 'general' && (
               <>
-                <h3>启动与关闭</h3>
+                <h3>{t('settings.startup')}</h3>
                 <label className="checkbox">
                   <input
                     type="checkbox"
                     checked={prefs.openAtLogin}
                     onChange={(e) => onSetOpenAtLogin(e.target.checked)}
                   />
-                  开机自动启动
+                  {t('settings.openAtLogin')}
                 </label>
                 <label>
-                  点窗口关闭按钮（×）时
+                  {t('settings.closeAction')}
                   <select
                     value={prefs.closeAction}
                     onChange={(e) => onSetCloseAction(e.target.value as 'ask' | 'tray' | 'quit')}
                   >
-                    <option value="ask">每次询问我</option>
-                    <option value="tray">隐藏到托盘（语音不断）</option>
-                    <option value="quit">直接退出程序</option>
+                    <option value="ask">{t('settings.closeAsk')}</option>
+                    <option value="tray">{t('settings.closeTray')}</option>
+                    <option value="quit">{t('settings.closeQuit')}</option>
                   </select>
                 </label>
 
-                <h3>快捷键</h3>
+                <h3>{t('settings.shortcuts')}</h3>
                 <ShortcutRow
-                  label="一键闭麦 / 开麦"
+                  label={t('settings.shortcutMic')}
                   value={prefs.shortcuts.mute}
                   onSet={(accel) => onSetShortcut('mute', accel)}
                 />
                 <ShortcutRow
-                  label="一键闭音响 / 开音响"
+                  label={t('settings.shortcutDeafen')}
                   value={prefs.shortcuts.deafen}
                   onSet={(accel) => onSetShortcut('deafen', accel)}
                 />
                 <p className="note-line">
-                  全局快捷键，游戏里也生效。字母和数字要搭配 Ctrl / Alt / Shift。
+                  {t('settings.shortcutNote')}
                 </p>
 
-                <h3>状态显示</h3>
+                <h3>{t('settings.statusDisplay')}</h3>
                 <label className="checkbox">
                   <input
                     type="checkbox"
                     checked={prefs.mediaDetect}
                     onChange={(e) => onSetMediaDetect(e.target.checked)}
                   />
-                  让别人看到我在听什么
+                  {t('settings.showListening')}
                 </label>
                 <label className="checkbox">
                   <input
@@ -385,11 +417,10 @@ export function SettingsDialog({
                     checked={prefs.gameDetect}
                     onChange={(e) => onSetGameDetect(e.target.checked)}
                   />
-                  让别人看到我在玩什么
+                  {t('settings.showPlaying')}
                 </label>
                 <p className="note-line">
-                  在右侧成员列表里显示「正在听：歌名」或「正在玩：游戏名」，
-                  玩游戏时优先显示游戏。检测只在本机做，关掉就完全不检测、也不上报。
+                  {t('settings.statusNote')}
                 </p>
 
                 {/* ── 上报没被认出来的游戏 ──────────────────────
@@ -402,12 +433,12 @@ export function SettingsDialog({
                   style={{ marginTop: 4 }}
                   onClick={openReport}
                 >
-                  没看到你在玩的游戏？上报一个
+                  {t('settings.reportGameCta')}
                 </button>
 
                 {Object.keys(prefs.customGames ?? {}).length > 0 && (
                   <div className="custom-games">
-                    <div className="custom-games-title">你自己上报的：</div>
+                    <div className="custom-games-title">{t('settings.customGames')}</div>
                     {Object.entries(prefs.customGames).map(([exe, name]) => (
                       <div className="custom-game-row" key={exe}>
                         <span className="custom-game-name">{name}</span>
@@ -418,7 +449,7 @@ export function SettingsDialog({
                             void window.desktop?.removeCustomGame(exe).then(onPrefsChanged)
                           }}
                         >
-                          删掉
+                          {t('settings.remove')}
                         </button>
                       </div>
                     ))}
@@ -431,17 +462,17 @@ export function SettingsDialog({
                       className="modal report-game"
                       onMouseDown={(e) => e.stopPropagation()}
                     >
-                      <h3>上报一个游戏</h3>
+                      <h3>{t('settings.reportTitle')}</h3>
                       <p className="note-line">
-                        从**当前开着的窗口**里挑一个，再给它起个名字。
+                        {t('settings.reportHint')}
                         <br />
-                        上报会**同步给所有人** —— 谁报过一次，大家以后就都能检测到它了。
+                        {t('settings.reportSync')}
                       </p>
 
                       <div className="report-window-list">
                         {wins.length === 0 && (
                           <div className="context-menu-note">
-                            正在读取窗口列表…（列表里只会有**有可见窗口**的程序）
+                            {t('settings.reportLoading')}
                           </div>
                         )}
                         {wins.map((w) => (
@@ -462,38 +493,38 @@ export function SettingsDialog({
                       </div>
 
                       <label className="report-name">
-                        显示成什么名字
+                        {t('settings.reportName')}
                         <input
                           value={gameName}
                           maxLength={40}
-                          placeholder="例如：英雄联盟"
+                          placeholder={t('settings.reportNamePlaceholder')}
                           onChange={(e) => setGameName(e.target.value)}
                         />
                       </label>
 
                       <div className="modal-actions">
                         <button className="ghost" onClick={() => setReportOpen(false)}>
-                          取消
+                          {t('settings.cancel')}
                         </button>
                         <button
                           className="primary"
                           disabled={!picked || !gameName.trim()}
                           onClick={saveReport}
                         >
-                          保存
+                          {t('settings.save')}
                         </button>
                       </div>
                     </div>
                   </div>
                 )}
 
-                <h3>游戏兼容</h3>                <div className="about-row">
+                <h3>{t('settings.gameCompat')}</h3>                <div className="about-row">
                   <span className="muted small">
                     {elevated === null
-                      ? '检查中…'
+                      ? t('settings.checking')
                       : elevated
-                        ? '已以管理员权限运行'
-                        : '普通权限运行'}
+                        ? t('settings.adminRunning')
+                        : t('settings.normalRunning')}
                   </span>
                   <div className="spacer" />
                   {elevated === false && (
@@ -501,7 +532,7 @@ export function SettingsDialog({
                       className="ghost small-btn"
                       onClick={() => void window.desktop?.relaunchElevated?.()}
                     >
-                      以管理员重启
+                      {t('settings.restartAsAdmin')}
                     </button>
                   )}
                 </div>
@@ -513,7 +544,7 @@ export function SettingsDialog({
                   <>
                     <div className="about-row" style={{ marginTop: 8 }}>
                       <span className="muted small">
-                        {taskExists ? '已设为默认以管理员启动' : '默认以普通权限启动'}
+                        {taskExists ? t('settings.adminDefaultOn') : t('settings.adminDefaultOff')}
                       </span>
                       <div className="spacer" />
                       {taskExists ? (
@@ -524,7 +555,7 @@ export function SettingsDialog({
                             setTimeout(refreshTask, 2500)
                           }}
                         >
-                          取消默认
+                          {t('settings.adminUnset')}
                         </button>
                       ) : (
                         <button
@@ -534,13 +565,12 @@ export function SettingsDialog({
                             setTimeout(refreshTask, 3500)
                           }}
                         >
-                          设为默认
+                          {t('settings.adminSet')}
                         </button>
                       )}
                     </div>
                     <p className="note-line">
-                      游戏以管理员权限运行时，Windows 会屏蔽普通权限程序的全局快捷键。
-                      「设为默认」只需要授权一次，之后每次启动自动提权、不再弹窗。
+                      {t('settings.adminNote')}
                     </p>
                   </>
                 )}
@@ -550,7 +580,7 @@ export function SettingsDialog({
             {tab === 'advanced' && (
               <>
                 <label>
-                  LiveKit 信令地址
+                  {t('settings.livekitUrl')}
                   <input
                     value={cfg.livekitUrl}
                     onChange={(e) => setCfg({ ...cfg, livekitUrl: e.target.value })}
@@ -558,7 +588,7 @@ export function SettingsDialog({
                   />
                 </label>
                 <label>
-                  后端地址
+                  {t('settings.apiUrl')}
                   <input
                     value={cfg.apiUrl}
                     onChange={(e) => setCfg({ ...cfg, apiUrl: e.target.value })}
@@ -566,25 +596,25 @@ export function SettingsDialog({
                   />
                 </label>
                 <label>
-                  邀请码
+                  {t('settings.inviteCode')}
                   <input
                     value={cfg.inviteCode}
                     onChange={(e) => setCfg({ ...cfg, inviteCode: e.target.value })}
-                    placeholder="服务端 .env 里的 INVITE_CODE"
+                    placeholder={t('settings.invitePlaceholder')}
                   />
                 </label>
-                <p className="note-line">已经内置在安装包里，换服务器时才需要改。</p>
+                <p className="note-line">{t('settings.inviteNote')}</p>
               </>
             )}
 
             {tab === 'about' && (
               <div className="about-row">
                 <span className="muted small">
-                  Voice {version ? `v${version}` : '（开发模式）'}
+                  Voice {version ? `v${version}` : t('settings.devMode')}
                 </span>
                 <div className="spacer" />
                 <button className="ghost small-btn" onClick={onCheckUpdate}>
-                  检查更新
+                  {t('settings.checkUpdate')}
                 </button>
               </div>
             )}
@@ -593,7 +623,7 @@ export function SettingsDialog({
 
         <div className="modal-actions">
           <button className="ghost" onClick={onClose}>
-            取消
+            {t('settings.cancel')}
           </button>
           <button
             onClick={() => {
@@ -602,7 +632,7 @@ export function SettingsDialog({
               onClose()
             }}
           >
-            保存
+            {t('settings.save')}
           </button>
         </div>
       </div>
@@ -631,6 +661,13 @@ function ShortcutRow({
 }) {
   const [recording, setRecording] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /**
+   * ⚠️ 子组件要**自己取一次** t ✗
+   *    它不在主组件的作用域里 ✓ 从外面传进来只会多一层没用的参数 ✓
+   *    （漏了这一步的话 typecheck 会立刻报 "Cannot find name 't'" ✓
+   *      真报了 6 处 ✓ —— 这就是为什么"漏翻译/漏接线"不用靠人眼去查 ✓）
+   */
+  const t = useT()
 
   useEffect(() => {
     if (!recording) return
@@ -662,8 +699,8 @@ function ShortcutRow({
         if (res.ok) return
         setError(
           res.reason === 'duplicate'
-            ? '和另一个快捷键重了，换一个'
-            : '这个组合被别的程序占用了，换一个试试'
+            ? t('settings.shortcutConflict')
+            : t('settings.shortcutTaken')
         )
       })
     }
@@ -683,15 +720,15 @@ function ShortcutRow({
             setRecording(true)
             setError(null)
           }}
-          title={recording ? '按下组合键，Esc 取消' : '点击后按下新的组合键'}
+          title={recording ? t('settings.shortcutRecordTip') : t('settings.shortcutClickTip')}
         >
-          {recording ? '按下按键…' : formatAccelerator(value)}
+          {recording ? t('settings.shortcutRecording') : formatAccelerator(value)}
         </button>
         {value && (
           <button
             className="ghost tiny"
             onClick={() => void onSet('')}
-            title="清除这个快捷键"
+            title={t('settings.shortcutClear')}
           >
             ×
           </button>
