@@ -1473,6 +1473,9 @@ export default function App() {
   const shareP2P = useScreenShareP2P({
     myUserId: cfg.userId,
     inVoice,
+    // ⚠️ 设置里关掉 → 完全不走直连 ✗ 画面一律服务器中转 ✓
+    //    见 screenShareP2P.ts 里 `enabled` 的注释 ✓
+    enabled: cfg.p2pEnabled,
     sendP2P: (to, payload) => Boolean(chatRef.current?.p2p(to, payload)),
     myStream: myShareStream,
     // ⚠️ 看自己的画面**不需要** P2P ✗（本地直接就有了 ✓）

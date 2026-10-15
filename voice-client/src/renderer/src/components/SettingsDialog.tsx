@@ -361,6 +361,21 @@ export function SettingsDialog({
                 {/* 这一条**必须留着** —— 不写的话用户改完档位发现没变化，
                     会以为设置坏了。它不是"解释"，是操作后果。 */}
                 <p className="note-line">{t('settings.shareRestartNote')}</p>
+
+                {/* ⚠️ P2P 开关放在**投屏页** ✗ 不放"高级" ✓
+                    它是投屏的传输方式 ✓ 和"服务器地址"那类运维参数不是一回事 ✓
+                    （放高级页的话，用户想关直连会先去翻投屏页、翻不到 ✓） */}
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={cfg.p2pEnabled}
+                    onChange={(e) => setCfg({ ...cfg, p2pEnabled: e.target.checked })}
+                  />
+                  {t('settings.p2pEnabled')}
+                </label>
+                {/* 这条是**后果说明** ✗ 不是功能解释 ✓
+                    不说清楚的话，用户关掉之后看见"经服务器"会以为设置没生效 ✓ */}
+                <p className="note-line">{t('settings.p2pEnabledNote')}</p>
               </>
             )}
 

@@ -7,6 +7,20 @@ export type AppConfig = {
   apiUrl: string
   /** 邀请码：向后端换 token 的唯一口令 */
   inviteCode: string
+  /**
+   * 投屏是否尝试 P2P 直连。默认开。
+   *
+   * ⚠️ 关掉的含义是**完全不走直连** ✗ 不是"建了不用" ✓
+   *    不建 RTCPeerConnection ✓ 也不发协商信令 ✓
+   *    → 画面一律由服务器中转 ✓（也就是 LiveKit 原本那条路 ✓）
+   *
+   * 为什么要这个开关 ✗
+   *   · 直连省的是**服务器出口**流量 ✓ 局域网里常常没必要折腾 ✓
+   *   · 某些网络（公司 / 校园网 / 严格 NAT）打不通 ✓
+   *     那就会先花几秒协商再回退 ✓ 关掉能直接省掉这段 ✓
+   *   · 出问题时也能一键确认"是不是 P2P 引起的" ✓
+   */
+  p2pEnabled: boolean
   /** 昵称 */
   nickname: string
   /** 头像（颜色 + emoji） */
@@ -56,6 +70,13 @@ export const DEFAULT_CONFIG: AppConfig = {
   //    换服务器必须重跑 init.sh ✓ 它会生成**新的**码 ✗
   //    旧服务器的 your-invite-code 对这台无效 ✗
   inviteCode: 'your-invite-code',
+  // ★ 投屏默认**尝试**直连 ✓
+  //   ⚠️ 为什么不用把 STORAGE_KEY 从 v2 升到 v3 ✗
+  //      升版本号是为了防"老配置里存着空字符串把新默认值盖回去" ✓
+  //      而这里是**新增**一个键 ✗ 老配置里根本没这个键 ✓
+  //      下面的展开 `{...DEFAULT_CONFIG, ...parsed}` 会让它落回默认值 true ✓
+  //      （只有"改已有键的默认值"才需要升版本 ✓）
+  p2pEnabled: true,
   nickname: '',
   avatar: DEFAULT_AVATAR,
   // 这两个由服务端在首次连接时下发并保存，不要手填

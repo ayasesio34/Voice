@@ -150,6 +150,8 @@ const ZH = {
   'settings.inviteCode': '邀请码',
   'settings.invitePlaceholder': '服务端 .env 里的 INVITE_CODE',
   'settings.inviteNote': '已经内置在安装包里，换服务器时才需要改。',
+  'settings.p2pEnabled': '启用 P2P 直连（投屏）',
+  'settings.p2pEnabledNote': '关掉后投屏一律由服务器中转：不尝试直连，也不发协商信令。直连省的是服务器出口流量，服务器带宽紧张时建议打开。改动在下次投屏时生效。',
   'settings.devMode': '（开发模式）',
   'settings.checkUpdate': '检查更新',
   'settings.shortcutConflict': '和另一个快捷键重了，换一个',
@@ -327,6 +329,8 @@ const ZH = {
   'p2p.connecting': '直连中…',
   'p2p.connectingTip': '正在尝试建立直连，还没成功前走服务器',
   'p2p.idleTip': '当前没有建立直连，画面由服务器中转（不是故障 —— 直连失败时本来就会回退到这里）',
+  'p2p.off': '经服务器（直连已关）',
+  'p2p.offTip': '你在设置里关掉了「P2P 直连」，画面由服务器中转。这不是故障 —— 打开开关就会重新尝试直连。',
 
   // ── 通知与提示 ──────────────────────────────────────────
   'app.defaultServerName': '我的服务器',
@@ -465,6 +469,8 @@ const EN: Record<MsgKey, string> = {
   'settings.inviteCode': 'Invite code',
   'settings.invitePlaceholder': 'INVITE_CODE from the server’s .env',
   'settings.inviteNote': 'Already baked into the installer — only change it when switching servers.',
+  'settings.p2pEnabled': 'Enable direct (P2P) screen share',
+  'settings.p2pEnabledNote': 'When off, screen shares always go through the server: no direct connection is attempted and no negotiation signals are sent. Direct connections save server egress bandwidth, so turn this on if your server egress is limited. Takes effect on your next share.',
   'settings.devMode': '(development mode)',
   'settings.checkUpdate': 'Check for updates',
   'settings.shortcutConflict': 'Already used by another shortcut — pick a different one',
@@ -642,6 +648,8 @@ const EN: Record<MsgKey, string> = {
   'p2p.connecting': 'Connecting…',
   'p2p.connectingTip': 'Trying to establish a direct connection; until it succeeds the video goes through the server',
   'p2p.idleTip': 'No direct connection is established right now, so the video is relayed by the server (this is not a failure — it is the normal fallback)',
+  'p2p.off': 'Via server (direct off)',
+  'p2p.offTip': 'You turned off direct (P2P) connections in settings, so the video is relayed by the server. This is not a failure — turn the switch back on to try a direct connection again.',
 
   // ── Notices ─────────────────────────────────────────────
   'app.defaultServerName': 'My server',
@@ -773,6 +781,8 @@ const JA: Record<MsgKey, string> = {
   'settings.inviteCode': '招待コード',
   'settings.invitePlaceholder': 'サーバーの .env にある INVITE_CODE',
   'settings.inviteNote': 'インストーラーに組み込み済みです。サーバーを変えるときだけ書き換えてください。',
+  'settings.p2pEnabled': 'P2P 直結を有効にする（画面共有）',
+  'settings.p2pEnabledNote': 'オフにすると画面共有は常にサーバー経由になります。直結は試行せず、ネゴシエーション信号も送りません。直結はサーバーの上り通信量を節約できます。サーバーの帯域が厳しいときはオンにしてください。次回の共有から有効です。',
   'settings.devMode': '（開発モード）',
   'settings.checkUpdate': '更新を確認',
   'settings.shortcutConflict': '別のショートカットと重なっています。変更してください',
@@ -949,6 +959,8 @@ const JA: Record<MsgKey, string> = {
   'p2p.connecting': '直結を試行中…',
   'p2p.connectingTip': '直結を試しています。成功するまではサーバー経由です',
   'p2p.idleTip': '現在は直結が確立していないため、映像はサーバー経由です（故障ではありません —— 直結できないときの正常なフォールバックです）',
+  'p2p.off': 'サーバー経由（直結オフ）',
+  'p2p.offTip': '設定で「P2P 直結」をオフにしているため、映像はサーバー経由です。故障ではありません —— スイッチをオンにすれば再び直結を試みます。',
 
   // ── 通知 ────────────────────────────────────────────────
   'app.defaultServerName': 'マイサーバー',
@@ -1080,6 +1092,8 @@ const FR: Record<MsgKey, string> = {
   'settings.inviteCode': 'Code d’invitation',
   'settings.invitePlaceholder': 'INVITE_CODE du fichier .env du serveur',
   'settings.inviteNote': 'Déjà intégré à l’installeur — à modifier seulement en changeant de serveur.',
+  'settings.p2pEnabled': 'Activer le partage direct (P2P)',
+  'settings.p2pEnabledNote': 'Désactivé, le partage d’écran passe toujours par le serveur : aucune connexion directe n’est tentée et aucun signal de négociation n’est envoyé. Le direct économise la bande passante sortante du serveur ; activez-le si elle est limitée. Prend effet au prochain partage.',
   'settings.devMode': '(mode développement)',
   'settings.checkUpdate': 'Rechercher des mises à jour',
   'settings.shortcutConflict': 'Déjà utilisé par un autre raccourci — choisissez-en un autre',
@@ -1256,6 +1270,8 @@ const FR: Record<MsgKey, string> = {
   'p2p.connecting': 'Connexion directe…',
   'p2p.connectingTip': 'Tentative de connexion directe ; tant qu’elle n’aboutit pas, le flux passe par le serveur',
   'p2p.idleTip': 'Aucune connexion directe n’est établie pour l’instant, le flux passe donc par le serveur (ce n’est pas une panne — c’est le repli normal)',
+  'p2p.off': 'Via le serveur (direct désactivé)',
+  'p2p.offTip': 'Vous avez désactivé les connexions directes (P2P) dans les réglages, le flux passe donc par le serveur. Ce n’est pas une panne — réactivez l’option pour retenter une connexion directe.',
 
   // ── Notifications ───────────────────────────────────────
   'app.defaultServerName': 'Mon serveur',

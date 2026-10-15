@@ -132,7 +132,7 @@ async function main() {
   // ══════════════════════════════════════════════════════════
 
   check('★ 每个状态都有徽章（一个都不许是 null ✗）', () => {
-    for (const s of ['idle', 'connecting', 'p2p', 'relay']) {
+    for (const s of ['idle', 'connecting', 'p2p', 'relay', 'off']) {
       const b = badgeFor(s)
       assert.ok(b, s + ' 没有徽章 ✗ —— 这就是"闪一下就没了"那个 bug ✓')
       assert.ok(b.textKey, s + ' 缺 textKey ✗')
@@ -171,9 +171,41 @@ async function main() {
   })
 
   check('四种状态的正文键**互不重复** ✓（不能两个状态显示同一句话 ✓）', () => {
-    const keys = ['idle', 'connecting', 'p2p', 'relay'].map((s) => badgeFor(s).textKey)
-    // idle 现在有**自己的**正文 ✓ 所以四个状态应当是 4 个不同的 ✓
-    assert.equal(new Set(keys).size, 4)
+    const keys = ['idle', 'connecting', 'p2p', 'relay', 'off'].map((s) => badgeFor(s).textKey)
+    // idle 现在有**自己的**正文 ✓ off 也有自己的 ✓ 所以五个状态应当是 5 个不同的 ✓
+    assert.equal(new Set(keys).size, 5)
+  })
+
+  // ══════════════════════════════════════════════════════════
+  // ★★ 「用户主动关掉直连」—— 第五个状态 off
+  //
+  //   这一条的要点是**别和 relay 混为一谈** ✗
+  //     relay = 试过了、没打通 → 用户该去看看网络 ✓
+  //     off   = 压根没试、是自己关的 → 什么都不用查 ✓
+  //   两者都"在走服务器" ✓ 但给用户的行动建议相反 ✓
+  //   混用的话，自己关了直连的人会跑去排查一个不存在的问题 ✗
+  // ══════════════════════════════════════════════════════════
+
+  check('★ off 说的**不是**「经服务器」那套 ✗（那是"打不通"的说法 ✓）', () => {
+    assert.equal(badgeFor('off').textKey, 'p2p.off')
+    assert.notEqual(
+      badgeFor('off').textKey,
+      badgeFor('relay').textKey,
+      'off 不能借用 relay 的「经服务器」✗ relay 配的提示语是"打不通"✓ 会让人白查网络 ✓',
+    )
+    assert.notEqual(badgeFor('off').tipKey, badgeFor('relay').tipKey)
+  })
+
+  check('★ off 说的**也不是**「未建立直连」✗（那听起来像"还在等"✓）', () => {
+    assert.notEqual(
+      badgeFor('off').textKey,
+      badgeFor('idle').textKey,
+      'off 不能借用 idle 的「未建立直连」✗ 那句听起来像"还没连上、在等"✓ 而实际永远不会连 ✓',
+    )
+  })
+
+  check('★ off 是**无色** ✗ 不是 warn ✓（自己的选择，没有需要注意的 ✓）', () => {
+    assert.equal(badgeFor('off').cls, '', 'off 用 warn 会让人以为出问题了 ✗')
   })
 
   console.log('')

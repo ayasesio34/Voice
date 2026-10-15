@@ -9,7 +9,7 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "node scripts/check-readme-md.mjs && node scripts/test-dataurl.mjs && node scripts/test-links.mjs && node scripts/test-media.mjs && node scripts/test-viewers.mjs && node scripts/test-chat-groups.mjs && node scripts/test-presets.mjs && node scripts/test-i18n.mjs && node scripts/test-p2p-state.mjs",
+    "test": "node scripts/check-syntax.mjs && node scripts/check-readme-md.mjs && node scripts/test-dataurl.mjs && node scripts/test-links.mjs && node scripts/test-media.mjs && node scripts/test-viewers.mjs && node scripts/test-chat-groups.mjs && node scripts/test-presets.mjs && node scripts/test-i18n.mjs && node scripts/test-p2p-state.mjs",
     "audit:contrast": "electron scripts/audit-contrast.cjs",
     "pack": "electron-vite build && electron-builder --dir",
     "dist": "electron-vite build && electron-builder",

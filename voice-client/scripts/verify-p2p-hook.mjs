@@ -103,7 +103,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useScreenShareP2P } from './lib/screenShareP2P'
 
 const cfg = window.__CFG
-const R = { status: 'boot', keys: [], frames: 0, err: null, log: [], hasStream: false }
+const R = { status: 'boot', keys: [], states: [], frames: 0, err: null, log: [], hasStream: false }
 window.__R = R
 
 const ws = new WebSocket(cfg.wsUrl)
@@ -173,6 +173,14 @@ function Probe() {
   const p2p = useScreenShareP2P({
     myUserId: cfg.selfId,
     inVoice: true,
+    // ⚠️ 默认开 ✓ 场景可以显式给 false 来验"关掉直连"那条路 ✗
+    //    写成「!== false」而不是直接读 cfg.p2pEnabled ✗ ——
+    //    ⚠️⚠️ 这里**绝对不能出现反引号** ✗
+    //      整个 driver 是一个**模板字符串** ✓ 反引号会把它提前截断 ✓
+    //      （这个坑踩过 5 次了 ✓ 所以宁可写「」也不用反引号 ✓）
+    //    后者在没写这个字段的场景里是 undefined ✓ 假值 ✓ 会被当成"关掉" ✓
+    //    于是**所有**老场景都会悄无声息地退化成"直连已关" ✗
+    enabled: cfg.p2pEnabled !== false,
     sendP2P: (to, payload) => { ws.send(JSON.stringify({ type: 'p2p', to, payload })); return true },
     myStream: cfg.role === 'share' ? myStream : null,
     watchTarget: cfg.role === 'view' ? cfg.peerId : null,
@@ -182,6 +190,10 @@ function Probe() {
   // ⚠️ 每次渲染都刷一遍 ✗ 这样 CDP 读到的永远是最新的 ✓
   R.status = p2p.status
   R.keys = Object.keys(p2p.streams)
+  // ⚠️ 连接状态表也要暴露 ✗ —— 用来验"关掉直连的人**根本没发起**连接" ✓
+  //    光看 keys（收到的流）不够 ✗ 那只说明"没收到" ✓
+  //    而"没发起"才是"完全不走直连"的证明 ✓
+  R.states = Object.keys(p2p.states)
   const st = cfg.role === 'view' ? p2p.streams[cfg.peerId] : null
   R.hasStream = Boolean(st)
 
@@ -325,6 +337,10 @@ async function main() {
   const pages = {
     '/share': makeHtml(bundle, { role: 'share', selfId: 'u-share', peerId: 'u-view', wsUrl: `ws://127.0.0.1:${PORT}/ws` }),
     '/view': makeHtml(bundle, { role: 'view', selfId: 'u-view', peerId: 'u-share', wsUrl: `ws://127.0.0.1:${PORT}/ws` }),
+    // ★ 第三个页面：**关掉了直连**的观看端 ✓
+    //    它盯的是同一个人（u-share ✓）但设置里把 P2P 关了 ✓
+    //    预期：状态 'off' ✓ 收不到流 ✓ 而且**从不发起连接** ✓
+    '/off': makeHtml(bundle, { role: 'view', selfId: 'u-off', peerId: 'u-share', p2pEnabled: false, wsUrl: `ws://127.0.0.1:${PORT}/ws` }),
   }
   harness = createServer((req, res) => {
     const html = pages[req.url?.split('?')[0] ?? '']
@@ -335,12 +351,14 @@ async function main() {
   await new Promise((r) => harness.listen(HARNESS_PORT, '127.0.0.1', r))
   console.log(`  [OK] 测试页服务在 ${HARNESS_PORT}`)
 
-  console.log('  启动两个 Chrome…')
+  console.log('  启动三个 Chrome…')
   const S = await launch(9431, join(tmp, 'ps'), `http://127.0.0.1:${HARNESS_PORT}/share`)
   const V = await launch(9432, join(tmp, 'pv'), `http://127.0.0.1:${HARNESS_PORT}/view`)
+  const O = await launch(9433, join(tmp, 'po'), `http://127.0.0.1:${HARNESS_PORT}/off`)
 
   await until(async () => (await S.ev(`window.__R && window.__R.log.includes('welcome')`)) === true, 25000, '分享端握手')
   await until(async () => (await V.ev(`window.__R && window.__R.log.includes('welcome')`)) === true, 25000, '观看端握手')
+  await until(async () => (await O.ev(`window.__R && window.__R.log.includes('welcome')`)) === true, 25000, '关掉直连的观看端握手')
   const errS = await S.ev(`window.__R.err`)
   const errV = await V.ev(`window.__R.err`)
   check('两个页面都握手成功、没报错', !errS && !errV, String(errS || errV))
@@ -411,6 +429,42 @@ async function main() {
     `frames ${framesBefore} → ${framesAfter}`,
   )
 
+  // ══════════════════════════════════════════════════════════
+  // ★★ ③.8 关掉直连的那个观看端 —— 必须**完全不走直连** ✗
+  //
+  //   这是设置里那个开关的**唯一**端到端验证 ✓
+  //
+  //   ⚠️ 三条断言缺一不可 ✗
+  //     ① 状态是 'off'      → 徽章显示"经服务器（直连已关）"✓
+  //                            而不是 idle 的"未建立直连"✗
+  //                            （后者看起来像"还没连上、在等"✓ 会让人白等 ✓）
+  //     ② 收不到流          → 画面只能走 LiveKit ✓ 也就是服务器中转 ✓
+  //     ③ **从没发起过连接** → 这才是"完全不走直连"的证明 ✓
+  //                            只看②的话，"发起了但没连上"也是收不到 ✓
+  //                            那就不是用户要的行为了 ✗
+  //       （断言③靠驱动里的 R.states ✓ 见上面的注释 ✓）
+  //
+  //   ⚠️ 断言③还有第二半 ✗：分享端的状态表里**也不该出现 u-off** ✓
+  //      因为它是"收到 want 才建连接"✓ 而关掉的那边根本不发 want ✓
+  // ══════════════════════════════════════════════════════════
+  console.log('')
+  console.log('  检查关掉直连的那个观看端…')
+  await wait(3000) // 给它足够时间"犯错"✓（真关了的话这几秒什么都不会发生 ✓）
+  const oStatus = await O.ev(`window.__R.status`)
+  const oKeys = await O.ev(`window.__R.keys`)
+  const oStates = await O.ev(`window.__R.states`)
+  const oFrames = await O.ev(`window.__R.frames`)
+  const sStates = await S.ev(`window.__R.states`)
+  check('★ 关掉直连的观看端 status = off（不是 idle ✗ 不是 relay ✗）', oStatus === 'off', `实际=${oStatus}`)
+  check('★ 它收不到任何 P2P 流（画面只能走服务器 ✓）', Array.isArray(oKeys) && oKeys.length === 0, JSON.stringify(oKeys))
+  check('★ 它**从没发起过**连接（这才是"完全不走直连"✗）', Array.isArray(oStates) && oStates.length === 0, JSON.stringify(oStates))
+  check('★ 它一张 P2P 画面都没出（frames=0 ✓）', oFrames === 0, `frames=${oFrames}`)
+  check(
+    '★ 分享端的状态表里也没有它 ✗（它没发 want ✓ 分享端就不该为它建连接 ✓）',
+    Array.isArray(sStates) && !sStates.includes('u-off'),
+    JSON.stringify(sStates),
+  )
+
   // ④ ★ 停掉共享 → 观看端被清干净 ✓
   console.log('')
   console.log('  让分享端停掉共享…')
@@ -430,7 +484,7 @@ async function main() {
   console.log(`通过 ${pass} / 失败 ${fail}`)
   console.log('')
 
-  S.ws.close(); V.ws.close()
+  S.ws.close(); V.ws.close(); O.ws.close()
   cleanup()
   process.exit(fail === 0 ? 0 : 1)
 }

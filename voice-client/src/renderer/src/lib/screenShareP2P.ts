@@ -47,12 +47,31 @@ export type ShareP2PStatus =
   | 'p2p'
   /** 有打不通的 ✓ 那些人在走服务器 ✓ */
   | 'relay'
+  /**
+   * 用户在设置里**主动关掉了直连** ✓
+   *
+   * ⚠️ 这个和上面四个是**两个维度** ✗
+   *   上面四个说的是"直连搞得怎么样" ✓
+   *   这个说的是"根本没打算搞直连" ✓
+   *   所以单独一个值 ✓ 不能借用 relay ✗
+   *   （relay = 试过了、没打通 ✓ 而这里是压根没试 ✓
+   *     两者对用户的行动建议完全不同：一个要去查网络 ✓ 一个是自己关的 ✓）
+   */
+  | 'off'
 
 export type ScreenShareP2POpts = {
   /** 我自己的 userId ✓ */
   myUserId: string
   /** 我加入语音了吗 ✓ 没加入就什么都不做 ✓（信令也发不出去 ✓） */
   inVoice: boolean
+  /**
+   * 允许尝试 P2P 直连吗 ✓（设置里的「启用 P2P 直连」✓）
+   *
+   * ⚠️ false 的含义是**完全不走直连** ✗ 不是"建了不用" ✓
+   *    两条路都不建 ✓ 信令也不收 ✓
+   *    于是画面只可能走 LiveKit ✓ 也就是服务器中转 ✓✓
+   */
+  enabled: boolean
   /** 发一条定向信令 ✓ 通常接 api 的 p2p() ✓ */
   sendP2P: (to: string, payload: unknown) => boolean
   /**
@@ -194,14 +213,32 @@ export function badgeFor(status: ShareP2PStatus): {
       //    而观看端可能是旧版客户端（根本不会发 P2P 信令 ✓）→ 分不出来 ✓
       //    → 那就**别假装分得出来** ✗ 说一句两者都真的话 ✓
       return { textKey: 'p2p.notDirect', tipKey: 'p2p.idleTip', cls: 'warn' }
+    case 'off':
+      // ⚠️ 用户**自己**在设置里关的 ✗ 这不是故障 ✓
+      //    所以：
+      //      · 不能说 relay 的「经服务器」✗ —— 那句配的提示语是"打不通"
+      //        会让用户以为网络有问题、跑去排查一个不存在的问题 ✓
+      //      · 也不能说 idle 的「未建立直连」✗ —— 那句听起来像"还没连上、在等"
+      //        而实际上**永远不会连** ✓ 会让人白等 ✓
+      //      · 颜色用**无色** ✗ 不是 warn ✓ —— warn 是"有事要你注意"
+      //        而这是他自己的选择 ✓ 没有需要注意的 ✓
+      return { textKey: 'p2p.off', tipKey: 'p2p.offTip', cls: '' }
   }
 }
 
 export function useScreenShareP2P(opts: ScreenShareP2POpts): ScreenShareP2P {
-  const { myUserId, inVoice, sendP2P, myStream, watchTarget } = opts
+  const { myUserId, inVoice, sendP2P, myStream, watchTarget, enabled } = opts
 
   const [streams, setStreams] = useState<Record<string, MediaStream>>({})
   const [states, setStates] = useState<Record<string, P2PState>>({})
+
+  /**
+   * ⚠️ `enabled` 也要走 ref ✗ —— 给 `handleSignal` 用 ✓
+   *    那个是 `useCallback(..., [])` ✓ 直接读闭包里的 enabled 会是**第一版**的值 ✓
+   *    → 用户在设置里关掉之后，旧闭包还以为开着 ✓ 继续处理信令 ✗
+   */
+  const enabledRef = useRef(enabled)
+  enabledRef.current = enabled
 
   /**
    * ⚠️ 下面两个 sendP2P 都要走 ref ✗
@@ -248,12 +285,23 @@ export function useScreenShareP2P(opts: ScreenShareP2POpts): ScreenShareP2P {
   const myVideoTrack = myStream?.getVideoTracks()[0] ?? null
 
   useEffect(() => {
+    // ⚠️ 关掉直连 → 和"没共享"走**同一条**清理路径 ✗
+    //    不能只写成"不新建" ✓ —— 那样用户中途关掉开关时
+    //    已经建好的那条连接会一直留着 ✗ 别人还能连上来 ✓
+    //    必须让它进来把 broadcaster stop() 掉 ✓
+    //
     // ⚠️ 没共享 / 不在语音里 → 拆掉 ✓
     //    不拆的话停掉共享之后别人还能连上来 ✓ 连上来的是一条**已经没有轨道的空连接** ✗
-    if (!myVideoTrack || !inVoice) {
+    if (!enabled || !myVideoTrack || !inVoice) {
       broadcasterRef.current?.stop()
       broadcasterRef.current = null
       setWantedBy([])
+      // ⚠️ 状态也要清 ✗ —— 见下面观看端那段的同款注释 ✓
+      //    不清的话表里留着旧的 'connected' ✓
+      //    → status 会算出 'p2p'（但开关明明关着 ✗）
+      setStates((prev) =>
+        mergeStates(prev, Object.fromEntries(Object.keys(prev).map((k) => [k, 'idle' as P2PState])))
+      )
       return
     }
 
@@ -288,15 +336,27 @@ export function useScreenShareP2P(opts: ScreenShareP2POpts): ScreenShareP2P {
       )
     }
     // ⚠️ 依赖的是**轨道** ✓ 不是流 ✓ 见上面的长注释 ✗
-  }, [myVideoTrack, inVoice, myUserId])
+    //    `enabled` 也要依赖 ✗ —— 开关一关就得把连接拆掉 ✓
+  }, [enabled, myVideoTrack, inVoice, myUserId])
 
   // ── 观看端：我在看谁就有它 ✓ ──────────────────────────────
   useEffect(() => {
+    // ⚠️ 关掉直连时 target 直接给 null ✗
+    //    → 走下面那条清理路径把 receiver stop() 掉 ✓
+    //    ⚠️ 关键：**不发 want 信令** ✓
+    //      观看端是先发 want 才让分享端建连接的 ✓
+    //      不发 = 分享端根本不知道有人想看 = 它那边也不会建 ✓✓
+    //      （对端可能自己也开着直连 ✓ 但它收不到 want 就不会动 ✓）
     // 没看人 / 不在语音 / 看的是自己 → 不需要 ✓（自己看自己走本地就行 ✓）
-    const target = watchTarget && watchTarget !== myUserId && inVoice ? watchTarget : null
+    const target =
+      enabled && watchTarget && watchTarget !== myUserId && inVoice ? watchTarget : null
     if (!target) {
       receiverRef.current?.stop()
       receiverRef.current = null
+      // ⚠️ 这里也要清状态 ✗（原来是漏的 ✓ 见下面的长注释 ✓）
+      if (!enabled && watchTarget) {
+        setStates((prev) => mergeStates(prev, { [watchTarget]: 'idle' }))
+      }
       return
     }
 
@@ -332,11 +392,17 @@ export function useScreenShareP2P(opts: ScreenShareP2POpts): ScreenShareP2P {
       //     和之前 mergeStates 那个是**同一类**：拆了之后没人清理 ✗）
       setStates((prev) => mergeStates(prev, { [target]: 'idle' }))
     }
-  }, [watchTarget, inVoice, myUserId])
+  }, [enabled, watchTarget, inVoice, myUserId])
 
   // ── 信令路由 ✓ ────────────────────────────────────────────
   const handleSignal = useCallback((from: string, payload: unknown) => {
     if (!from) return
+    // ⚠️ 关掉直连时**整条信令都忽略** ✗
+    //    对端可能还开着直连、还在给我们发 want / offer ✓
+    //    我们这边两个 ref 都是 null ✓ 所以本来也不会出事 ✓
+    //    但显式挡掉更稳 ✗ —— 万一以后有"半边开着"的代码路径，
+    //    这里能保证**关了就是完全不参与** ✓
+    if (!enabledRef.current) return
     // ⚠️ 两边都要喂 ✗
     //    同一个 from 既可能是"想看我的"（分享端收 want ✓）
     //    也可能是"我在看的那个"（观看端收 offer ✓）
@@ -362,7 +428,12 @@ export function useScreenShareP2P(opts: ScreenShareP2POpts): ScreenShareP2P {
   return {
     streams,
     states,
-    status: verdict(states),
+    // ⚠️ 关掉直连时**不走 verdict** ✗
+    //    verdict 是"从一堆连接状态里算结论" ✓ 而关掉时根本没有连接状态 ✓
+    //    硬算的话 states 是空的 → 返回 'idle' ✓
+    //    而 idle 的徽章写着「未建立直连」✗ —— 对"自己关掉的"是**误导** ✓
+    //    （他一看"未建立"会以为是网络问题、去查一个不存在的问题 ✗）
+    status: enabled ? verdict(states) : 'off',
     handleSignal,
   }
 }

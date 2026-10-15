@@ -23,7 +23,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, openSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, openSync, readdirSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -38,6 +38,82 @@ const NODE = ['C:\\Program Files\\nodejs\\node.exe'].find((p) => existsSync(p)) 
 const ELECTRON = join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe')
 
 const tmp = mkdtempSync(join(tmpdir(), 'voice-mainview-'))
+
+/**
+ * ⚠️⚠️ 跑之前必须确认 `out/` 是**新**的 ✗
+ *
+ *   这个脚本是 `spawn(ELECTRON, ['.'])` ✓ Electron 读 package.json 的 main ✓
+ *   渲染进程加载的是 **`out/renderer/` 里那份已构建的 bundle** ✗ 不是 src ✓
+ *   ★ 而它**不会自己 build** ✗
+ *
+ *   真踩过（就在加 P2P 开关那次）：
+ *     改完 `SettingsDialog.tsx` 直接跑这个脚本 ✓
+ *     断言「投屏页应该有 P2P 开关」**红了** ✓
+ *     于是我去翻 JSX、翻 i18n 字典、翻 DOM 结构 —— 全是好的 ✗
+ *     真正原因是 `out/` 还是**改之前**那份 bundle ✓
+ *     → 白查了一轮，还差点去改本来没坏的代码 ✗✗
+ *
+ *   ⚠️ 为什么必须**硬失败**而不是打印个提醒 ✗
+ *      提醒会被忽略 ✓ 而"验了旧产物"的后果是**假红或假绿** ✓
+ *      两种都会把人带偏 ✓ 所以宁可拒绝跑 ✓
+ */
+function assertBuildFresh() {
+  const outDir = join(ROOT, 'out')
+  const srcDir = join(ROOT, 'src')
+
+  if (!existsSync(outDir)) {
+    console.log('')
+    console.log('  ❌ 没有 out/ —— 先构建：npm run build')
+    console.log('')
+    process.exit(1)
+  }
+
+  const newest = (dir) => {
+    let t = 0
+    const walk = (d) => {
+      let entries
+      try {
+        entries = readdirSync(d, { withFileTypes: true })
+      } catch {
+        return
+      }
+      for (const e of entries) {
+        const p = join(d, e.name)
+        if (e.isDirectory()) walk(p)
+        else {
+          try {
+            const m = statSync(p).mtimeMs
+            if (m > t) t = m
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+    }
+    walk(dir)
+    return t
+  }
+
+  const srcT = newest(srcDir)
+  const outT = newest(outDir)
+
+  if (srcT > outT) {
+    console.log('')
+    console.log('  ❌ out/ 是**旧**的 —— 源码比构建产物新 ✗')
+    console.log(`      src 最新改动：${new Date(srcT).toLocaleString()}`)
+    console.log(`      out 最新构建：${new Date(outT).toLocaleString()}`)
+    console.log('')
+    console.log('  ⚠️ 不先构建的话，这个脚本验的是**改之前**的界面 ✗')
+    console.log('     断言会莫名其妙地红 ✓ 然后你会去查本来没坏的代码 ✓')
+    console.log('')
+    console.log('  修法：npm run build')
+    console.log('')
+    process.exit(1)
+  }
+}
+
+assertBuildFresh()
+
 let srv = null
 let appProc = null
 const cleanup = () => {
@@ -941,10 +1017,30 @@ const onlyTops =
     aboutPane.includes('Check for updates') &&
     !aboutPane.includes('检查更新')
 
-  if (advOk && aboutOk) {
-    console.log('         ✅ Advanced 和 About 两页都翻好了（第二批那四节 ✓）')
+  // ★ 第三页：「屏幕共享」—— 这一页有 **P2P 开关** ✓
+  //
+  //   ⚠️ 为什么专门验它 ✗
+  //      那个开关是**新增**的 ✓ 而"新增了控件但文案没加进 4 语言字典"是
+  //      这个项目里反复出问题的类型 ✓
+  //      （i18n 测试只查"键在不在"✗ 查不到"界面上到底渲染出来没有" ✓
+  //        万一 JSX 写错位置、或者 tab 判断写漏了 ✓ 键在也没用 ✓）
+  //   ⚠️ 断言分两半 ✗：英文**必须有** ✓ 中文**必须没剩** ✓
+  //      （和上面两页同一套写法 ✓ 别用"整页不许有中文"那种粗写法 ✓）
+  const scrPane = await paneText('Screen share')
+  // ⚠️ 两半分开算 ✗ 别写成一个 && 串 ✓
+  //    第一版就是这么写的 ✓ 失败时只报 "Screen=false" ✗
+  //    既不知道是"英文没渲染"还是"中文没搬走" ✓ 白跑一次几分钟的浏览器 ✓
+  const scrHasEn = typeof scrPane === 'string' && scrPane.includes('Enable direct (P2P) screen share')
+  const scrHasZh = typeof scrPane === 'string' && scrPane.includes('启用 P2P 直连')
+  const scrOk = scrHasEn && !scrHasZh
+  // ⚠️ 开关在**页尾** ✗ 所以打印末尾才看得到它 ✓
+  console.log(`         Screen share 页：有英文开关=${scrHasEn} 残留中文=${scrHasZh}`)
+  console.log(`         末尾 130 字：${JSON.stringify(String(scrPane).slice(-130))}`)
+
+  if (advOk && aboutOk && scrOk) {
+    console.log('         ✅ Advanced、About、Screen share 三页都翻好了（含新增的 P2P 开关 ✓）')
   } else {
-    console.log(`         ❌ 没搬完：Advanced=${advOk} About=${aboutOk} ✗`)
+    console.log(`         ❌ 没搬完：Advanced=${advOk} About=${aboutOk} Screen=${scrOk} ✗`)
     uiFail++
   }
 
